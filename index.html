@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NYC 3D Map — Taxi Taxi</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+        /* The only colour the UI hardcodes. main.js rewrites --accent when the
+           map theme changes and everything below re-tints off it, so the chrome
+           never sits orange over a green city. Each derived tone is a mix of the
+           accent with white/black rather than a fixed hue, which keeps text
+           legible whatever accent lands here. */
+        --accent: #ff8c2a;
+        --text: color-mix(in srgb, var(--accent) 16%, white);
+        --muted: color-mix(in srgb, var(--accent) 28%, #97a0ad);
+        --edge: color-mix(in srgb, var(--accent) 40%, transparent);
+        --edge-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+        --fill: color-mix(in srgb, var(--accent) 12%, transparent);
+        --fill-strong: color-mix(in srgb, var(--accent) 20%, transparent);
+        --glow: color-mix(in srgb, var(--accent) 75%, transparent);
+      }
+
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #04050a;
+        color: var(--text);
+      }
+
+      #app {
+        width: 100%;
+        height: 100%;
+      }
+
+      #loading-indicator {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--edge-soft);
+        border-radius: 999px;
+        background: rgba(10, 8, 6, 0.76);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        color: var(--text);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+      }
+
+      .loading-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 12px var(--glow);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+
+      .loading-text {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 140px;
+      }
+
+      .loading-label {
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .loading-bar {
+        width: 110px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+
+      .loading-bar span {
+        display: block;
+        width: 0%;
+        height: 100%;
+        background: linear-gradient(90deg, var(--accent) 0%, var(--text) 100%);
+        transition: width 220ms ease;
+      }
+
+      @keyframes pulse {
+        0%, 100% { transform: scale(0.9); opacity: 0.8; }
+        50% { transform: scale(1.15); opacity: 1; }
+      }
+
+      #place {
+        position: fixed;
+        top: 24px;
+        right: 28px;
+        z-index: 20;
+        text-align: right;
+        pointer-events: none; /* never steal a drag from the camera */
+        text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85);
+      }
+
+      #place h1 {
+        margin: 0;
+        color: var(--text);
+        font-size: 30px;
+        font-weight: 300;
+        letter-spacing: 0.22em;
+        line-height: 1.1;
+        text-transform: uppercase;
+        /* Uppercase + wide tracking adds a phantom gap on the right edge; pull
+           it back so the block optically aligns with the lines beneath it. */
+        margin-right: -0.22em;
+      }
+
+      #place p {
+        margin: 6px 0 0;
+      }
+
+      #place .region {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.19em;
+        text-transform: uppercase;
+        margin-right: -0.19em;
+      }
+
+      #place .coords {
+        margin-top: 8px;
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.12em;
+        font-variant-numeric: tabular-nums;
+        margin-right: -0.12em;
+      }
+
+      /* One column owns the position and the width; the cards inside just stack.
+         Keeps stats and controls locked to the same width for free. */
+      #hud {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 232px;
+      }
+
+      /* The camera card, on the far side. It clears #place rather than sitting under
+         it, and unlike #place it *does* take pointer events — it's the one thing on
+         this side of the screen you're meant to be able to hit. */
+      #hud-right {
+        position: fixed;
+        top: 150px;
+        right: 28px;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 210px;
+      }
+
+      #stats,
+      .panel {
+        width: 100%;
+        border: 1px solid var(--edge-soft);
+        border-radius: 14px;
+        background: rgba(9, 10, 12, 0.74);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+        font-size: 12px;
+        overflow: hidden;
+        user-select: none;
+      }
+
+      #stats-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 11px 14px;
+        border: 0;
+        background: none;
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      #stats-toggle .chevron {
+        color: var(--accent);
+        font-size: 14px;
+      }
+
+      #stats-body {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        margin: 0;
+        padding: 2px 14px 14px;
+      }
+
+      #stats[data-collapsed] #stats-body {
+        display: none;
+      }
+
+      #stats-body > div {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      #stats-body dt {
+        color: var(--muted);
+      }
+
+      #stats-body dd {
+        margin: 0;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .panel-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 11px 14px;
+        border: 0;
+        background: none;
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      .panel-toggle .chevron {
+        color: var(--accent);
+        font-size: 14px;
+      }
+
+      .panel-body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 2px 14px 14px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+      }
+
+      .panel[data-collapsed] .panel-body {
+        display: none;
+      }
+
+      .panel section {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .panel h2 {
+        margin: 0;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .panel .section-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 0 0 6px;
+        border: 0;
+        border-bottom: 1px solid var(--edge-soft);
+        background: none;
+        color: var(--muted);
+        font: inherit;
+        letter-spacing: inherit;
+        text-transform: inherit;
+        cursor: pointer;
+      }
+
+      .panel .section-toggle:hover {
+        color: var(--text);
+      }
+
+      .panel .section-toggle .chev {
+        color: var(--accent);
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      /* Everything in the section except its heading. Avoids wrapping each
+         section's controls in an extra div purely to have something to hide. */
+      .panel section[data-collapsed] > *:not(h2) {
+        display: none;
+      }
+
+      .panel label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: var(--text);
+      }
+
+      .panel label > span {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .panel em {
+        color: var(--muted);
+        font-style: normal;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .panel label.swatch,
+      .panel label.check,
+      .panel label.pick {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .panel label.check {
+        justify-content: flex-start;
+      }
+
+      .panel select {
+        appearance: none;
+        padding: 5px 24px 5px 9px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 6px;
+        background-color: rgba(255, 255, 255, 0.05);
+        /* Chevron drawn in CSS rather than an SVG asset — the panel loads with no
+           network fetches of its own and this keeps it that way. */
+        background-image:
+          linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+          linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+        background-position: right 11px center, right 7px center;
+        background-size: 4px 4px, 4px 4px;
+        background-repeat: no-repeat;
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .panel select:focus-visible {
+        outline: 1px solid var(--accent);
+      }
+
+      /* The popup itself is drawn by the OS, which does not inherit the panel's
+         colours — without this the options render as black-on-black. */
+      .panel select option {
+        background: #12151c;
+        color: #e7ebf2;
+      }
+
+      /* The portion of the track behind the thumb is filled with the accent.
+         --pct is written by syncInput() in main.js on every change, so the fill
+         tracks the value and the colour tracks the theme. */
+      .panel input[type="range"] {
+        width: 100%;
+        height: 3px;
+        margin: 4px 0;
+        border-radius: 999px;
+        background:
+          linear-gradient(
+            to right,
+            var(--accent) 0 var(--pct, 50%),
+            rgba(255, 255, 255, 0.14) var(--pct, 50%) 100%
+          );
+        appearance: none;
+        cursor: pointer;
+      }
+
+      .panel input[type="range"]::-webkit-slider-thumb {
+        width: 13px;
+        height: 13px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--glow);
+        appearance: none;
+        cursor: pointer;
+      }
+
+      .panel input[type="range"]::-moz-range-thumb {
+        width: 13px;
+        height: 13px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--glow);
+        cursor: pointer;
+      }
+
+      .panel input[type="color"] {
+        width: 42px;
+        height: 24px;
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        background: none;
+        cursor: pointer;
+      }
+
+      .panel input[type="color"]::-webkit-color-swatch {
+        border: 0;
+        border-radius: 4px;
+      }
+
+      .panel input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+
+      /* Drawn by hand rather than left to accent-color, so the tick, the glow and
+         the unchecked border all follow the theme instead of only the fill. */
+      .panel input[type="checkbox"] {
+        position: relative;
+        width: 15px;
+        height: 15px;
+        flex: none;
+        border: 1px solid var(--edge);
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.04);
+        appearance: none;
+        cursor: pointer;
+      }
+
+      .panel input[type="checkbox"]:checked {
+        border-color: var(--accent);
+        background: var(--accent);
+        box-shadow: 0 0 9px var(--glow);
+      }
+
+      .panel input[type="checkbox"]:checked::after {
+        position: absolute;
+        top: 0px;
+        left: 3.5px;
+        content: "";
+        width: 4px;
+        height: 8px;
+        border: solid #0a0a0c;
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+      }
+
+      .panel .themes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .panel .themes button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font: inherit;
+        font-size: 11px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .panel .themes button:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .panel .themes button.is-active {
+        border-color: var(--edge);
+        background: var(--fill);
+        color: var(--text);
+      }
+
+      .panel .themes i {
+        width: 9px;
+        height: 9px;
+        flex: none;
+        border-radius: 50%;
+        box-shadow: 0 0 7px currentColor;
+      }
+
+      /* The drag-mode selector. A row of radio-ish buttons rather than a <select>,
+         because this is the one control you reach for mid-drag and it should be one
+         click, not two. Grid rather than flex so the three stay equal width and the
+         active pill doesn't shift its neighbours when the border thickens. */
+      .panel .modes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+
+      .panel .modes button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 4px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font: inherit;
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+      }
+
+      .panel .modes button:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .panel .modes button.is-active {
+        border-color: var(--edge);
+        background: var(--fill);
+        color: var(--text);
+      }
+
+      .panel .modes button svg {
+        width: 16px;
+        height: 16px;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        fill: none;
+      }
+
+      /* Tells you what the *other* buttons still do — the modes only rebind the left
+         drag, and without saying so it looks like picking Pan took orbiting away. */
+      .panel .hint {
+        margin: 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .panel-reset {
+        padding: 8px;
+        border: 1px solid var(--edge-soft);
+        border-radius: 8px;
+        background: var(--fill);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .panel-reset:hover {
+        background: var(--fill-strong);
+      }
+
+      .info,
+      .legend,
+      .debug {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <header id="place">
+      <h1 data-place-name></h1>
+      <p class="region" data-place-region></p>
+      <p class="coords" data-place-coords></p>
+    </header>
+
+    <div id="hud">
+      <aside id="stats" data-collapsed>
+        <button id="stats-toggle" type="button" aria-expanded="false" aria-controls="stats-body">
+          <span>Stats</span>
+          <span class="chevron" aria-hidden="true">+</span>
+        </button>
+
+        <dl id="stats-body">
+          <div><dt>Vehicles tracked</dt><dd data-stat="taxis">—</dd></div>
+          <div><dt>Buildings</dt><dd data-stat="buildings">—</dd></div>
+          <div><dt>Roads</dt><dd data-stat="roads">—</dd></div>
+          <div><dt>Road segments</dt><dd data-stat="segments">—</dd></div>
+          <div><dt>Junctions</dt><dd data-stat="nodes">—</dd></div>
+          <div><dt>Map source</dt><dd data-stat="source">—</dd></div>
+          <div><dt>FPS</dt><dd data-stat="fps">—</dd></div>
+        </dl>
+      </aside>
+
+      <aside id="panel" class="panel">
+      <button id="panel-toggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-body">
+        <span>Look</span>
+        <span class="chevron" aria-hidden="true">−</span>
+      </button>
+
+      <div id="panel-body" class="panel-body">
+        <section>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="true">
+              <span>Theme</span>
+              <span class="chev" aria-hidden="true">−</span>
+            </button>
+          </h2>
+          <!-- Filled from themes/index.js — each bundle carries its own label and swatch. -->
+          <div class="themes"></div>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Image</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label>
+            <span>Brightness<em data-value="exposure"></em></span>
+            <input type="range" data-setting="exposure" min="0.2" max="2" step="0.01" value="0.9" />
+          </label>
+          <label>
+            <span>Contrast<em data-value="contrast"></em></span>
+            <input type="range" data-setting="contrast" min="0.5" max="2" step="0.01" value="1" />
+          </label>
+          <label>
+            <span>Glow<em data-value="bloom"></em></span>
+            <input type="range" data-setting="bloom" min="0" max="1.5" step="0.01" value="0.55" />
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="depthOfField" checked />
+            <span>Depth of field</span>
+          </label>
+          <label>
+            <span>Focus falloff<em data-value="dofStrength"></em></span>
+            <input type="range" data-setting="dofStrength" min="0" max="1" step="0.01" value="0.45" />
+          </label>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Taxi trails</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="swatch">
+            <span>Head</span>
+            <input type="color" data-setting="trailHead" value="#fff0d2" />
+          </label>
+          <label class="swatch">
+            <span>Tail</span>
+            <input type="color" data-setting="trailTail" value="#ff4d0a" />
+          </label>
+          <label class="pick">
+            <span>Decay</span>
+            <select data-setting="trailDecay">
+              <option value="short">Short</option>
+              <option value="long">Long</option>
+            </select>
+          </label>
+          <label>
+            <span>Opacity<em data-value="trailOpacity"></em></span>
+            <input type="range" data-setting="trailOpacity" min="0.15" max="1" step="0.01" value="0.82" />
+          </label>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Environment</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="swatch">
+            <span>Colour</span>
+            <input type="color" data-setting="envColor" value="#ff8a2e" />
+          </label>
+          <label>
+            <span>Reflection<em data-value="envIntensity"></em></span>
+            <input type="range" data-setting="envIntensity" min="0" max="4" step="0.01" value="1.6" />
+          </label>
+          <label class="swatch">
+            <span>Floor colour</span>
+            <input type="color" data-setting="groundColor" value="#05070c" />
+          </label>
+          <label class="swatch">
+            <span>Sky colour</span>
+            <input type="color" data-setting="background" value="#04050a" />
+          </label>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Sun</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="swatch">
+            <span>Colour</span>
+            <input type="color" data-setting="sunColor" value="#ffd0a0" />
+          </label>
+          <label>
+            <span>Strength<em data-value="sunIntensity"></em></span>
+            <input type="range" data-setting="sunIntensity" min="0" max="3" step="0.01" value="0.45" />
+          </label>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Buildings</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="buildingsVisible" checked />
+            <span>Show buildings</span>
+          </label>
+          <label>
+            <span>Opacity<em data-value="buildingOpacity"></em></span>
+            <input type="range" data-setting="buildingOpacity" min="0" max="1" step="0.01" value="1" />
+          </label>
+          <label class="swatch">
+            <span>Colour</span>
+            <input type="color" data-setting="buildingColor" value="#16181e" />
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="reflectTrails" checked />
+            <span>Reflect trails</span>
+          </label>
+          <label>
+            <span>Softness<em data-value="buildingRoughness"></em></span>
+            <input type="range" data-setting="buildingRoughness" min="0.15" max="1" step="0.01" value="0.72" />
+          </label>
+          <label>
+            <span>Grain<em data-value="buildingGrain"></em></span>
+            <input type="range" data-setting="buildingGrain" min="0" max="1.5" step="0.01" value="0.35" />
+          </label>
+          <label>
+            <span>Variation<em data-value="buildingVariation"></em></span>
+            <input type="range" data-setting="buildingVariation" min="0" max="1" step="0.01" value="0.35" />
+          </label>
+          <label class="swatch">
+            <span>Variation A</span>
+            <input type="color" data-setting="variationColorA" value="#2b2926" />
+          </label>
+          <label class="swatch">
+            <span>Variation B</span>
+            <input type="color" data-setting="variationColorB" value="#5c564e" />
+          </label>
+          <label class="swatch">
+            <span>Variation C</span>
+            <input type="color" data-setting="variationColorC" value="#3a3532" />
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="showEdges" checked />
+            <span>Show edges</span>
+          </label>
+          <label class="swatch">
+            <span>Edge colour</span>
+            <input type="color" data-setting="edgeColor" value="#6b4a33" />
+          </label>
+        </section>
+
+        <button id="panel-reset" class="panel-reset" type="button">Reset to defaults</button>
+      </div>
+      </aside>
+    </div>
+
+    <div id="hud-right">
+      <aside id="nav" class="panel">
+        <button id="nav-toggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="nav-body">
+          <span>Camera</span>
+          <span class="chevron" aria-hidden="true">−</span>
+        </button>
+
+        <div id="nav-body" class="panel-body">
+          <section>
+            <h2>
+              <button type="button" class="section-toggle" aria-expanded="true">
+                <span>Left drag</span>
+                <span class="chev" aria-hidden="true">−</span>
+              </button>
+            </h2>
+
+            <!-- Icons inline rather than as an icon font or sprite: the page still
+                 fetches nothing of its own, and they inherit currentColor so the
+                 active pill re-tints with the theme like everything else. -->
+            <div class="modes">
+              <button type="button" data-drag="orbit" title="Left drag orbits the camera">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="10" cy="10" r="3.2" />
+                  <ellipse cx="10" cy="10" rx="8" ry="3.6" />
+                </svg>
+                <span>Orbit</span>
+              </button>
+              <button type="button" data-drag="pan" title="Left drag slides the camera sideways">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M10 3v14M3 10h14" />
+                  <path d="M10 3 8 5.4M10 3l2 2.4M10 17l-2-2.4M10 17l2-2.4" />
+                  <path d="M3 10l2.4-2M3 10l2.4 2M17 10l-2.4-2M17 10l-2.4 2" />
+                </svg>
+                <span>Pan</span>
+              </button>
+              <button type="button" data-drag="zoom" title="Left drag pulls the camera in and out">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <circle cx="8.6" cy="8.6" r="5.4" />
+                  <path d="M12.6 12.6 17 17M6.2 8.6h4.8" />
+                </svg>
+                <span>Zoom</span>
+              </button>
+            </div>
+
+            <p class="hint" data-drag-hint></p>
+          </section>
+
+          <section>
+            <h2>
+              <button type="button" class="section-toggle" aria-expanded="true">
+                <span>Motion</span>
+                <span class="chev" aria-hidden="true">−</span>
+              </button>
+            </h2>
+            <label>
+              <span>Orbit speed<em data-value="orbitSpeed"></em></span>
+              <input type="range" data-setting="orbitSpeed" min="0.1" max="2" step="0.01" value="1" />
+            </label>
+            <label>
+              <span>Pan speed<em data-value="panSpeed"></em></span>
+              <input type="range" data-setting="panSpeed" min="0.1" max="2" step="0.01" value="1" />
+            </label>
+            <label>
+              <span>Zoom speed<em data-value="zoomSpeed"></em></span>
+              <input type="range" data-setting="zoomSpeed" min="0.1" max="2" step="0.01" value="1" />
+            </label>
+            <label>
+              <span>Damping<em data-value="damping"></em></span>
+              <input type="range" data-setting="damping" min="0" max="0.3" step="0.005" value="0.06" />
+            </label>
+          </section>
+
+          <section>
+            <h2>
+              <button type="button" class="section-toggle" aria-expanded="true">
+                <span>Auto-orbit</span>
+                <span class="chev" aria-hidden="true">−</span>
+              </button>
+            </h2>
+            <label class="check">
+              <input type="checkbox" data-setting="autoOrbit" />
+              <span>Drift around the city</span>
+            </label>
+            <label>
+              <span>Drift speed<em data-value="autoOrbitSpeed"></em></span>
+              <input type="range" data-setting="autoOrbitSpeed" min="0.05" max="2" step="0.01" value="0.35" />
+            </label>
+          </section>
+
+          <button id="nav-reset" class="panel-reset" type="button">Reset view</button>
+        </div>
+      </aside>
+    </div>
+
+    <div id="loading-indicator" hidden>
+      <div class="loading-dot"></div>
+      <div class="loading-text">
+        <span class="loading-label" data-loading-label>Loading map…</span>
+        <div class="loading-bar" aria-hidden="true">
+          <span data-loading-bar></span>
+        </div>
+      </div>
+    </div>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
