@@ -68,6 +68,12 @@ const TAXI_DATA = {
 // live demand loaded; without it the cars flow on undisturbed as before.
 const FARE_SECONDS = [120, 360];
 
+// TAXI_COUNT is the peak fleet — the number on the road at the busiest hour. When
+// live demand loads, the *active* fleet scales down from it by that hour's share of
+// real trip volume, so the city thins out overnight and fills back up by evening.
+// This floor keeps a few cabs roaming even at 4am rather than an empty grid.
+const MIN_FLEET = 150;
+
 // Seconds for a road's glow to fade by half. Short leaves a clipped comet behind
 // each taxi; long lets the arterials stay lit end to end, so the picture reads as
 // accumulated flow rather than individual cars.
@@ -213,6 +219,13 @@ function resetView() {
 // place to read the current state from, and one place to persist it.
 // Structural toggles live outside the theme bundles on purpose: switching palette
 // should not silently turn your buildings or lights back on.
+// Minutes since local midnight, 0..1439 — the unit the time-of-day slider and the
+// clock display both work in.
+function wallClockMinutes() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
 const settings = {
   theme: DEFAULT_THEME.id,
   buildingsVisible: true,
@@ -241,6 +254,12 @@ const settings = {
   // Read fresh every frame by decayHeat, so there is nothing to apply on change.
   trailDecay: 'long',
   trailOpacity: 0.82,
+  // Time of day in minutes since midnight (0..1439). Drives which hour's real pickup
+  // demand seeds the fleet and how many cabs are on the road, and shows on the clock.
+  // Starts at the browser's wall-clock time; `liveTime` keeps it tracking the clock
+  // until the user scrubs the slider, which switches to a frozen, manual time.
+  timeOfDay: wallClockMinutes(),
+  liveTime: true,
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -845,6 +864,50 @@ function publishStats(values) {
   }
 }
 
+// The clock shown two places: appended to the region label ("New York City —
+// 12:59PM") and in the stats. Both read settings.timeOfDay.
+function renderTimeOfDay(minutes) {
+  const region = document.querySelector('[data-place-region]');
+  if (region) region.textContent = `${LOCATION.region} — ${formatClock(minutes)}`;
+  publishStats({ time: formatClock(minutes) });
+}
+
+// Reflect settings.timeOfDay into the slider (position + readout). Used when the live
+// clock advances it, since that bypasses the slider's own input event.
+function syncTimeControl() {
+  const slider = document.querySelector('[data-setting="timeOfDay"]');
+  if (slider) {
+    slider.value = settings.timeOfDay;
+    slider.style.setProperty('--pct', `${(settings.timeOfDay / 1439) * 100}%`);
+  }
+  const readout = document.querySelector('[data-time-readout]');
+  if (readout) readout.textContent = formatClock(settings.timeOfDay);
+}
+
+// Push settings.timeOfDay through to everything that depends on it: the clock display
+// and, when the hour changes, the demand-scaled fleet size. Called from the live tick
+// and from the slider's applySetting.
+function applyTimeOfDay() {
+  renderTimeOfDay(settings.timeOfDay);
+  const hour = Math.floor(settings.timeOfDay / 60);
+  if (hour !== fleetHour) {
+    fleetHour = hour;
+    setActiveFleet(targetFleetSize());
+    publishStats({ taxis: activeTaxis });
+  }
+}
+
+// Once a minute of real time (while liveTime is on), advance the clock. Cheap: it
+// early-returns every frame until the wall-clock minute actually rolls over.
+function tickTime() {
+  if (!settings.liveTime) return;
+  const minutes = wallClockMinutes();
+  if (minutes === settings.timeOfDay) return;
+  settings.timeOfDay = minutes;
+  syncTimeControl();
+  applyTimeOfDay();
+}
+
 // Sampled over a rolling second rather than from the frame delta: a per-frame
 // figure jitters far too much to read.
 let fpsFrames = 0;
@@ -883,7 +946,7 @@ function setupPlaceLabel() {
   if (!name || !region || !coords) return;
 
   name.textContent = LOCATION.name;
-  region.textContent = LOCATION.region;
+  renderTimeOfDay(settings.timeOfDay); // sets the region label with the "— 12:59PM" suffix
   coords.textContent = [
     formatCoord(CENTER_LAT, 'N', 'S'),
     formatCoord(CENTER_LON, 'E', 'W'),
@@ -2004,8 +2067,29 @@ function paintEdge(edge) {
 // is continuous flow, with the arterials carrying the load.
 // ---------------------------------------------------------------------------
 
-const taxis = [];
+const taxis = []; // always holds TAXI_COUNT objects; only the first `activeTaxis` drive
 const hotEdges = new Set();
+
+// How many of the fleet are currently on shift, and the hour that count was set for.
+// Everything past activeTaxis is parked: not updated, laying no trail.
+let activeTaxis = 0;
+let fleetHour = -1;
+
+// settings.timeOfDay drives everything time-of-day: which hour's pickups seed the
+// cabs, how much of the fleet is active, and the clock. One source so they never
+// disagree — it's the wall clock while liveTime is on, or the slider when it's off.
+function currentHour() {
+  return Math.floor(settings.timeOfDay / 60);
+}
+
+// 779 → "12:59PM", 0 → "12:00AM", 720 → "12:00PM".
+function formatClock(minutes) {
+  const h24 = Math.floor(minutes / 60) % 24;
+  const m = minutes % 60;
+  const period = h24 < 12 ? 'AM' : 'PM';
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, '0')}${period}`;
+}
 
 function edgeExit(edge, fromNode) {
   return edge.a === fromNode ? edge.b : edge.a;
@@ -2244,9 +2328,16 @@ function buildDemandModel(rows) {
   }
 
   if (all.length === 0) return null;
+
+  // Each hour's pickups as a fraction of the busiest hour's — the real demand curve,
+  // used to scale the active fleet. Straight from the same buckets, no extra query.
+  const hourCounts = byHour.map((list) => list.length);
+  const peak = Math.max(1, ...hourCounts);
+
   return {
     byHour: byHour.map((list) => Int32Array.from(list)),
     all: Int32Array.from(all),
+    hourVolume: hourCounts.map((count) => count / peak),
   };
 }
 
@@ -2257,7 +2348,7 @@ function buildDemandModel(rows) {
 function demandStart() {
   if (!demandModel) return null;
 
-  const hourPool = demandModel.byHour[new Date().getHours()];
+  const hourPool = demandModel.byHour[currentHour()];
   const pool = hourPool && hourPool.length > 0 ? hourPool : demandModel.all;
   if (pool.length === 0) return null;
 
@@ -2270,6 +2361,26 @@ function demandStart() {
 }
 
 const fareSeconds = () => FARE_SECONDS[0] + Math.random() * (FARE_SECONDS[1] - FARE_SECONDS[0]);
+
+// How many cabs should be on the road for the current hour. Without live demand the
+// whole fleet drives (no curve to scale by); with it, TAXI_COUNT × this hour's share
+// of peak volume, never below the floor.
+function targetFleetSize() {
+  if (!demandModel) return TAXI_COUNT;
+  return Math.max(MIN_FLEET, Math.round(TAXI_COUNT * demandModel.hourVolume[currentHour()]));
+}
+
+// Set how many cabs are on shift. Growing the fleet re-places the cabs coming on at a
+// current-hour hotspot rather than resuming them from wherever they parked; shrinking
+// it just stops updating the tail, whose trails then decay away.
+function setActiveFleet(n) {
+  n = Math.max(0, Math.min(taxis.length, n));
+  for (let i = activeTaxis; i < n; i += 1) {
+    placeTaxi(taxis[i]);
+    taxis[i].fare = fareSeconds(); // fresh fare, so a returning cab doesn't re-place at once
+  }
+  activeTaxis = n;
+}
 
 function placeTaxi(taxi) {
   // Start on a real pickup hotspot when demand loaded; otherwise anywhere on the map.
@@ -2385,7 +2496,7 @@ function depositHeat(edge, toB, amount) {
 }
 
 function updateTaxis(dt) {
-  for (let i = 0; i < taxis.length; i += 1) {
+  for (let i = 0; i < activeTaxis; i += 1) {
     const taxi = taxis[i];
 
     // Fare complete: drop this cab and pick a new one up at a real hotspot. Gated on
@@ -2624,7 +2735,12 @@ async function init() {
 
   setLoadingState(90, 'Dispatching taxis…');
   await nextFrame();
-  if (edges.length > 0) spawnTaxis();
+  if (edges.length > 0) {
+    spawnTaxis();
+    activeTaxis = taxis.length;          // spawnTaxis placed them all…
+    setActiveFleet(targetFleetSize());   // …then trim to the current hour's demand
+    fleetHour = currentHour();
+  }
 
   // `roads` counts OSM ways (a named street), `edges` counts the straight
   // segments they decompose into — the second is always much larger, and it is
@@ -2637,7 +2753,8 @@ async function init() {
     : formatNumber(buildingCount);
 
   publishStats({
-    taxis: taxis.length,
+    time: formatClock(settings.timeOfDay),
+    taxis: activeTaxis,
     buildings,
     roads: data.roads.length,
     segments: edges.length,
@@ -2652,7 +2769,7 @@ async function init() {
     // .controls-revealed rules in index.html).
     document.body.classList.add('controls-revealed');
   }, 400);
-  console.info(`${nodes.length} nodes, ${edges.length} road segments, ${taxis.length} taxis`);
+  console.info(`${nodes.length} nodes, ${edges.length} road segments, ${activeTaxis}/${taxis.length} taxis active`);
 }
 
 const clock = new THREE.Clock();
@@ -2670,6 +2787,8 @@ function animate() {
   if (bokeh.enabled) {
     bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
   }
+
+  tickTime(); // advance the live clock (and resize the fleet on an hour rollover)
 
   if (taxis.length > 0) {
     updateTaxis(dt);
@@ -2878,6 +2997,25 @@ function applySetting(key, value) {
     case 'trailOpacity':
       trailUniforms.opacity.value = value;
       break;
+    case 'timeOfDay':
+      // Scrubbing the slider is a manual override — drop out of live mode so the next
+      // clock tick doesn't yank the time back to now, and reflect that in the toggle.
+      if (settings.liveTime) {
+        settings.liveTime = false;
+        const live = document.querySelector('[data-setting="liveTime"]');
+        if (live) live.checked = false;
+      }
+      syncTimeControl(); // formatted readout beside the slider
+      applyTimeOfDay();
+      break;
+    case 'liveTime':
+      // Turning live back on snaps straight to the current wall-clock minute.
+      if (value) {
+        settings.timeOfDay = wallClockMinutes();
+        syncTimeControl();
+        applyTimeOfDay();
+      }
+      break;
     case 'envColor':
       applyEnvironment(value);
       break;
@@ -3074,6 +3212,8 @@ function setupControls() {
     // A theme can now move camera-motion settings too, so the Camera panel's
     // sliders have to be brought back into step alongside this one.
     syncCameraPanel();
+    // The time slider carries a formatted readout wirePanel doesn't know how to fill.
+    syncTimeControl();
     themeButtons.forEach((button) => {
       button.classList.toggle('is-active', button.dataset.theme === settings.theme);
     });

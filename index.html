@@ -157,6 +157,10 @@
         flex-direction: column;
         gap: 12px;
         width: 232px;
+        /* Never taller than the viewport (20px margin top and bottom). The long
+           panel below shrinks and scrolls inside this rather than running off
+           the bottom of the screen out of reach. */
+        max-height: calc(100vh - 40px);
       }
 
       /* The camera card, on the far side. It clears #place rather than sitting under
@@ -171,6 +175,7 @@
         flex-direction: column;
         gap: 12px;
         width: 210px;
+        max-height: calc(100vh - 170px); /* 150px top + 20px bottom margin */
       }
 
       /* Both control columns swing and fade into place once the map is ready — the
@@ -226,6 +231,21 @@
         font-size: 12px;
         overflow: hidden;
         user-select: none;
+      }
+
+      /* Stats sits at its natural height at the top of the left column. */
+      #stats {
+        flex: 0 0 auto;
+      }
+
+      /* A panel is a flex column so its body can take the leftover height in the
+         column and scroll, while its title bar stays pinned above. It shrinks to
+         fit the viewport but never grows past its content. */
+      .panel {
+        display: flex;
+        flex-direction: column;
+        flex: 0 1 auto;
+        min-height: 0;
       }
 
       #stats-toggle {
@@ -303,9 +323,52 @@
         display: flex;
         flex-direction: column;
         gap: 16px;
-        padding: 2px 14px 14px;
-        max-height: calc(100vh - 100px);
+        /* No top padding: it would sit above the sticky headers as a hairline the
+           scrolling controls peek through. */
+        padding: 0 14px 14px;
+        /* Takes the height left inside the panel and scrolls when the sections
+           together exceed it — so no section can end up below the screen edge. */
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
+      }
+
+      /* Slim, theme-tinted scrollbar via the WebKit pseudo-elements (Chrome, Edge,
+         Safari). A custom width is only possible this way — the standard
+         scrollbar-width property offers no numeric value — so these drive the width.
+         The transparent border + padding-box clip insets the thumb so it reads even
+         thinner than the track and never touches the panel edge. */
+      .panel-body::-webkit-scrollbar {
+        width: 5px;
+      }
+
+      .panel-body::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .panel-body::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--accent) 45%, transparent);
+        background-clip: padding-box;
+        border: 1px solid transparent;
+        border-radius: 5px;
+      }
+
+      .panel-body::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, var(--accent) 75%, transparent);
+        background-clip: padding-box;
+        border: 1px solid transparent;
+        border-radius: 5px;
+      }
+
+      /* Firefox has no ::-webkit-scrollbar, so give it the standard properties — but
+         only there. Setting these in Chrome would make it ignore the WebKit rules
+         above and fall back to the wider stock "thin" bar. `thin` is as narrow as
+         Firefox allows. */
+      @supports not selector(::-webkit-scrollbar) {
+        .panel-body {
+          scrollbar-width: thin;
+          scrollbar-color: color-mix(in srgb, var(--accent) 45%, transparent) transparent;
+        }
       }
 
       .panel[data-collapsed] .panel-body {
@@ -324,6 +387,19 @@
         font-weight: 600;
         letter-spacing: 0.11em;
         text-transform: uppercase;
+        /* Pin each section heading to the top of the scrolling body: as you scroll
+           down, the current section's title stays put and the ones below stack up
+           under it, so every section stays one click from being collapsed. The
+           background + blur frost over the controls sliding underneath so nothing
+           ghosts through, matching the panel's own frosted look. The -1px top and
+           matching padding pull the frosted band up over any sub-pixel seam without
+           moving the text. */
+        position: sticky;
+        top: -1px;
+        padding-top: 1px;
+        z-index: 2;
+        background: rgba(9, 10, 12, 0.92);
+        backdrop-filter: blur(14px);
       }
 
       .panel .section-toggle {
@@ -640,6 +716,7 @@
         </button>
 
         <dl id="stats-body">
+          <div><dt>Time of day</dt><dd data-stat="time">—</dd></div>
           <div><dt>Vehicles tracked</dt><dd data-stat="taxis">—</dd></div>
           <div><dt>Buildings</dt><dd data-stat="buildings">—</dd></div>
           <div><dt>Roads</dt><dd data-stat="roads">—</dd></div>
@@ -704,6 +781,14 @@
               <span class="chev" aria-hidden="true">+</span>
             </button>
           </h2>
+          <label>
+            <span>Time of day<em data-time-readout></em></span>
+            <input type="range" data-setting="timeOfDay" min="0" max="1439" step="1" value="720" />
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="liveTime" checked />
+            <span>Live (follow clock)</span>
+          </label>
           <label class="swatch">
             <span>Head</span>
             <input type="color" data-setting="trailHead" value="#fff0d2" />

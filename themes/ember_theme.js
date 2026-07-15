@@ -26,7 +26,7 @@ export default {
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
   sunColor: '#ffd0a0', sunIntensity: 0.45,
-  skyLight: '#35425e', groundLight: '#4a2410',
+  skyLight: '#394760', groundLight: '#4a2410',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.
