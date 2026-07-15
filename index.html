@@ -173,6 +173,48 @@
         width: 210px;
       }
 
+      /* Both control columns swing and fade into place once the map is ready — the
+         body gets .controls-revealed in JS at that point. Until then they sit turned
+         60° and invisible, so they animate in rather than popping. The turn is around
+         the vertical (Y) axis — like a card on a vertical spindle — hinged on each
+         card's screen-side edge, so they open like a pair of doors. perspective()
+         gives the turn real depth; the ease-out curve decelerates it into its resting
+         flat. pointer-events guard against clicking the invisible cards mid-load. */
+      #hud,
+      #hud-right {
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 900ms ease,
+          transform 1500ms cubic-bezier(0.33, 1, 0.68, 1);
+      }
+
+      #hud {
+        transform: perspective(900px) rotateY(60deg);
+        transform-origin: left center;
+      }
+
+      #hud-right {
+        transform: perspective(900px) rotateY(-60deg);
+        transform-origin: right center;
+      }
+
+      body.controls-revealed #hud,
+      body.controls-revealed #hud-right {
+        opacity: 1;
+        transform: perspective(900px) rotateY(0deg);
+        pointer-events: auto;
+      }
+
+      /* Respect a reduced-motion preference: fade only, no spin. */
+      @media (prefers-reduced-motion: reduce) {
+        #hud,
+        #hud-right {
+          transform: none;
+          transition: opacity 300ms ease;
+        }
+      }
+
       #stats,
       .panel {
         width: 100%;
@@ -753,6 +795,26 @@
             <input type="range" data-setting="buildingRoughness" min="0.15" max="1" step="0.01" value="0.72" />
           </label>
           <label>
+            <span>Metalness<em data-value="buildingMetalness"></em></span>
+            <input type="range" data-setting="buildingMetalness" min="0" max="1" step="0.01" value="0.15" />
+          </label>
+          <label>
+            <span>Specular<em data-value="buildingSpecular"></em></span>
+            <input type="range" data-setting="buildingSpecular" min="0" max="1" step="0.01" value="1" />
+          </label>
+          <label>
+            <span>Diffuse<em data-value="buildingDiffuse"></em></span>
+            <input type="range" data-setting="buildingDiffuse" min="0" max="1.5" step="0.01" value="1" />
+          </label>
+          <label>
+            <span>Sheen<em data-value="buildingSheen"></em></span>
+            <input type="range" data-setting="buildingSheen" min="0" max="1" step="0.01" value="0.4" />
+          </label>
+          <label class="swatch">
+            <span>Sheen colour</span>
+            <input type="color" data-setting="buildingSheenColor" value="#3d2417" />
+          </label>
+          <label>
             <span>Grain<em data-value="buildingGrain"></em></span>
             <input type="range" data-setting="buildingGrain" min="0" max="1.5" step="0.01" value="0.35" />
           </label>
@@ -874,6 +936,20 @@
               <span>Drift speed<em data-value="autoOrbitSpeed"></em></span>
               <input type="range" data-setting="autoOrbitSpeed" min="0.05" max="2" step="0.01" value="0.35" />
             </label>
+          </section>
+
+          <section>
+            <h2>
+              <button type="button" class="section-toggle" aria-expanded="true">
+                <span>Snapshot</span>
+                <span class="chev" aria-hidden="true">−</span>
+              </button>
+            </h2>
+            <label class="check">
+              <input type="checkbox" id="save-4k" />
+              <span>Render 4K</span>
+            </label>
+            <button id="save-image" class="panel-reset" type="button">Save</button>
           </section>
 
           <button id="nav-reset" class="panel-reset" type="button">Reset view</button>

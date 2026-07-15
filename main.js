@@ -68,7 +68,14 @@ const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerH
 camera.position.set(-130, 88, 175);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Cap the render resolution below the display's native ratio. On a 2× Retina
+// panel, rendering at full 2× means every post pass — RenderPass, Bokeh, Bloom,
+// contrast — fills 4× the pixels, which is the dominant cost of this pipeline.
+// 1.5 is the sweet spot: with MSAA and bloom softening the frame, the drop from
+// 2× is nearly invisible, but it cuts pixel work by ~44%. Lower this toward 1.0
+// for more speed, raise toward 2.0 for maximum sharpness.
+const MAX_PIXEL_RATIO = 1.5;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -102,6 +109,17 @@ const view = {
   autoOrbit: false,
   autoOrbitSpeed: 0.35,
 };
+
+// These keys live in `view` and apply through applyView, not applySetting — but a
+// theme can still carry them, so applyTheme uses this to route each key to the
+// right handler and the right panel. Derived from `view` so a new camera setting
+// is themeable the moment it's added there.
+const VIEW_KEYS = new Set(Object.keys(view));
+
+// Assigned by setupCamera once its panel exists. applyTheme can push camera values
+// into `view` before that (nothing breaks — the sliders just sync when set up), so
+// this stays a no-op until then.
+let syncCameraPanel = () => {};
 
 // What the left button does in each mode. The right button always picks up whichever
 // of orbit/pan the left one just gave away, so choosing a mode can never strand you
@@ -173,6 +191,20 @@ const settings = {
   buildingsVisible: true,
   buildingOpacity: 1.0,
   buildingRoughness: 0.72,
+  buildingMetalness: 0.15,
+  // The two halves of the surface response, split out as classic diffuse/specular
+  // levels. Specular scales the reflective highlight (and with it how hard the
+  // trails reflect); diffuse scales the matte body independently, so you can set
+  // a dark reflective clay (low diffuse, some specular) or a flat matte one.
+  buildingSpecular: 1.0,
+  buildingDiffuse: 1.0,
+  // Sheen is the "clay" tell: a soft, broad grazing-angle glow layered over the
+  // diffuse. Kept subtle — pushed hard it turns the facades milky. The colour is
+  // a faint cool tone so it reads as matte solid rather than tinting the palette.
+  buildingSheen: 0.4,
+  // Per-theme: each theme carries its own dimmed sheen tone so the clay picks up
+  // that palette's light. This is only the fallback if a theme omits it.
+  buildingSheenColor: '#3d2417',
   buildingGrain: 0.35,
   buildingVariation: 0.35,
   reflectTrails: true,
@@ -192,7 +224,10 @@ const settings = {
 const drawSize = renderer.getDrawingBufferSize(new THREE.Vector2());
 const renderTarget = new THREE.WebGLRenderTarget(drawSize.x, drawSize.y, {
   type: THREE.HalfFloatType,
-  samples: 4,
+  // 2× MSAA rather than 4×: the bloom and DoF already soften edges, so the second
+  // doubling of samples buys little here while costing real resolve bandwidth on a
+  // full-res HalfFloat target. Bump back to 4 if line edges look stair-stepped.
+  samples: 2,
 });
 
 const composer = new EffectComposer(renderer, renderTarget);
@@ -486,6 +521,13 @@ const waterUniforms = {
   // fragment shader, so the bank is a beach rather than a kerb.
   uBankWidth: { value: 3.0 },
 
+  // Pulls the waterline back from the OSM shore by this many world units, eroding the
+  // wet region evenly. OSM coastlines slop a few units into the shore-side blocks, and
+  // at a grazing angle the low-roughness water reads that sliver as flooding the street.
+  // Retracting it tucks the waterline back behind the bank. Applied to the land-rise
+  // lift *and* the fragment wetness with the same value, so geometry and shading agree.
+  uShoreBias: { value: 3.0 },
+
   // Size of the plane in world units, and of one field texel in uv. Together they turn
   // a difference between two texels into a real-world slope, which is what lets the
   // bank be *lit* as a slope instead of being a lifted-but-flat-shaded step.
@@ -516,13 +558,15 @@ groundMaterial.onBeforeCompile = (shader) => {
       uniform float uWaterRange;
       uniform float uLandRise;
       uniform float uBankWidth;
+      uniform float uShoreBias;
       uniform vec2 uPlaneSize;
       uniform vec2 uFieldTexel;
 
-      // Height of the land at a point, in world units above the waterline.
+      // Height of the land at a point, in world units above the waterline. uShoreBias
+      // shifts the signed distance so the bank climbs from the retracted waterline.
       float landHeight(vec2 at) {
         float sd = (texture2D(uWaterField, at).r - 0.5) * 2.0 * uWaterRange;
-        return uLandRise * smoothstep(-uBankWidth, uBankWidth, sd);
+        return uLandRise * smoothstep(-uBankWidth, uBankWidth, sd + uShoreBias);
       }
     `)
     // The bank has to be lit as a slope or the whole thing is invisible: a lifted but
@@ -580,6 +624,7 @@ groundMaterial.onBeforeCompile = (shader) => {
       uniform float uWaveStrength;
       uniform vec2 uWindAxis;
       uniform float uShallowFade;
+      uniform float uShoreBias;
 
       // Ashima's simplex noise. Gradient noise rather than value noise, so the swell
       // has no lattice in it — a grid of ripples aligned to the world axes is the one
@@ -680,7 +725,9 @@ groundMaterial.onBeforeCompile = (shader) => {
     // first stage that runs — so the field is sampled here and the result reused.
     .replace('#include <color_fragment>', /* glsl */`
       #include <color_fragment>
-      float waterSd = (texture2D(uWaterField, vWaterUv).r - 0.5) * 2.0 * uWaterRange;
+      // uShoreBias retracts the waterline into the river by that many world units, so
+      // the OSM shoreline's slop never laps into the shore-side blocks.
+      float waterSd = (texture2D(uWaterField, vWaterUv).r - 0.5) * 2.0 * uWaterRange + uShoreBias;
 
       // Half a texel of blend. The field is bilinear, so the waterline lands wherever
       // it truly falls inside the texel rather than snapping to its edge.
@@ -1458,18 +1505,48 @@ async function addBuildings(elements) {
   // a soft bloom on concrete instead of a sharp mirrored streak.
   const grain = buildNoiseTexture(5, 205, 255);
 
-  buildingMaterial = new THREE.MeshStandardMaterial({
+  // MeshPhysicalMaterial is a drop-in superset of MeshStandardMaterial that adds a
+  // `sheen` layer — a soft, wide grazing-angle glow that's the real "clay / matte
+  // solid" tell. It stacks on top of the envMap sheen, so it's kept low here and on
+  // a slider; pushed hard it turns the facades milky.
+  buildingMaterial = new THREE.MeshPhysicalMaterial({
     // White: the facade colour lives in the vertex colours, which the shader
     // multiplies this by. Tinting here as well would double-apply the palette.
     color: 0xffffff,
     roughness: settings.buildingRoughness,
-    metalness: 0.30,
+    metalness: settings.buildingMetalness,
     map: grain,
     bumpMap: grain,
     bumpScale: settings.buildingGrain,
     roughnessMap: buildNoiseTexture(6),
     vertexColors: true,
+    // High sheenRoughness spreads the sheen into a broad matte wrap rather than a
+    // tight rim, which is what reads as clay instead of satin.
+    sheen: settings.buildingSheen,
+    sheenRoughness: 0.9,
+    sheenColor: new THREE.Color(settings.buildingSheenColor),
+    // Specular level: scales the dielectric F0, so it governs both the highlight
+    // and how strongly the reflected trails show. 1 is physically correct concrete;
+    // toward 0 the facades go dead-matte lambert.
+    specularIntensity: settings.buildingSpecular,
   });
+
+  // Diffuse level. There's no native "diffuse intensity" in the PBR workflow —
+  // diffuse is just the albedo — so patch the lighting to scale only the diffuse
+  // BRDF term, leaving the specular F0 untouched. That makes Diffuse and Specular
+  // genuinely independent: the matte body and the reflective sheen move separately.
+  buildingMaterial.onBeforeCompile = (shader) => {
+    shader.uniforms.uDiffuse = { value: settings.buildingDiffuse };
+    buildingMaterial.userData.shader = shader;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uDiffuse;')
+      // material.diffuseColor is populated by this include and consumed by the
+      // diffuse BRDF below it; scaling it here never reaches specularColor.
+      .replace(
+        '#include <lights_physical_fragment>',
+        '#include <lights_physical_fragment>\n\tmaterial.diffuseColor *= uDiffuse;'
+      );
+  };
 
   buildingCount = geometries.length;
 
@@ -2373,7 +2450,12 @@ async function init() {
   });
 
   setLoadingState(100, 'Ready');
-  window.setTimeout(hideLoadingIndicator, 400);
+  window.setTimeout(() => {
+    hideLoadingIndicator();
+    // Swing the control columns in as the loading overlay clears (see the
+    // .controls-revealed rules in index.html).
+    document.body.classList.add('controls-revealed');
+  }, 400);
   console.info(`${nodes.length} nodes, ${edges.length} road segments, ${taxis.length} taxis`);
 }
 
@@ -2400,7 +2482,167 @@ function animate() {
 
   updateReflectionProbe(dt);
   composer.render();
+  // Right after the render, while the drawing buffer still holds this frame — see
+  // drainCapture. Any other time the buffer may already be cleared on present.
+  drainCapture();
   trackFps(dt);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot export. Grabs the composited frame as a JPEG and lets the user pick
+// where it lands, naming shots 3dmap_taxi_<map>_<n>.jpg with an incrementing n.
+// ---------------------------------------------------------------------------
+
+// A filesystem-safe stub of the map name for the filename.
+const MAP_SLUG = LOCATION.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'map';
+
+// The shot counter is remembered across reloads (per map), so a later session
+// keeps numbering where the last left off rather than starting back at _1.
+const SHOT_SEQ_KEY = `taxi_shot_seq_${MAP_SLUG}`;
+
+function nextShotNumber() {
+  let last = 0;
+  try { last = parseInt(localStorage.getItem(SHOT_SEQ_KEY), 10) || 0; } catch { /* private mode */ }
+  return last + 1;
+}
+
+function rememberShotNumber(n) {
+  try { localStorage.setItem(SHOT_SEQ_KEY, String(n)); } catch { /* private mode */ }
+}
+
+// The renderer clears its drawing buffer on present (preserveDrawingBuffer is off,
+// for speed), so the only safe moment to read pixels is the instant after a render.
+// A queued capture is drained by drainCapture() in animate(), right after render.
+let pendingCapture = null;
+
+function captureFrame() {
+  return new Promise((resolve, reject) => { pendingCapture = { resolve, reject }; });
+}
+
+function drainCapture() {
+  if (!pendingCapture) return;
+  const { resolve, reject } = pendingCapture;
+  pendingCapture = null;
+  renderer.domElement.toBlob(
+    (blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))),
+    'image/jpeg',
+    0.92,
+  );
+}
+
+// 4K on the long axis, keeping the window's aspect ratio so the framing matches
+// exactly what's on screen — just at more pixels.
+function fourKDimensions() {
+  const aspect = window.innerWidth / window.innerHeight;
+  return aspect >= 1
+    ? { width: 3840, height: Math.round(3840 / aspect) }
+    : { width: Math.round(3840 * aspect), height: 3840 };
+}
+
+// Render one frame at an arbitrary resolution without disturbing the live view.
+// The whole GPU sequence — resize, render, read pixels, resize back — runs in a
+// single synchronous stretch, so the animation loop can't slip a frame in at the
+// wrong size and the browser never paints the oversized buffer. Reading with
+// gl.readPixels (rather than canvas.toBlob) is what keeps it synchronous.
+async function renderAtResolution(width, height) {
+  const prevPixelRatio = renderer.getPixelRatio();
+  const prevAspect = camera.aspect;
+
+  renderer.setPixelRatio(1);
+  composer.setPixelRatio(1);
+  renderer.setSize(width, height, false); // false: leave the on-screen CSS size alone
+  composer.setSize(width, height);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+
+  composer.render();
+
+  const gl = renderer.getContext();
+  const pixels = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+  renderer.setPixelRatio(prevPixelRatio);
+  composer.setPixelRatio(prevPixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = prevAspect;
+  camera.updateProjectionMatrix();
+
+  // Pack into a 2D canvas, flipping rows — GL's origin is bottom-left, the image's
+  // is top-left. A plain 2D-canvas toBlob then encodes with none of the WebGL
+  // preserve-buffer caveats.
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(width, height);
+  const rowBytes = width * 4;
+  for (let y = 0; y < height; y += 1) {
+    const src = y * rowBytes;
+    image.data.set(pixels.subarray(src, src + rowBytes), (height - 1 - y) * rowBytes);
+  }
+  ctx.putImageData(image, 0, 0);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))),
+      'image/jpeg',
+      0.92,
+    );
+  });
+}
+
+async function saveScreenshot({ fourK = false } = {}) {
+  const number = nextShotNumber();
+  const filename = `3dmap_taxi_${MAP_SLUG}_${number}.jpg`;
+
+  // Grab the frame first, so the JPEG is exactly the view that was on screen when
+  // the button was clicked rather than wherever the traffic has drifted to by the
+  // time the save dialog closes.
+  let blob;
+  try {
+    const { width, height } = fourKDimensions();
+    blob = fourK ? await renderAtResolution(width, height) : await captureFrame();
+  } catch (error) {
+    console.error('Screenshot capture failed:', error);
+    return;
+  }
+
+  // Preferred path: the File System Access API opens a real "save as" dialog so the
+  // user picks the folder and name. Chromium-only; the click's user activation is
+  // still live here (a frame is milliseconds, the activation window is seconds).
+  if (window.showSaveFilePicker) {
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'JPEG image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } }],
+      });
+    } catch (error) {
+      if (error.name === 'AbortError') return; // cancelled — leave the counter be
+      handle = null; // any other failure falls through to the download below
+    }
+    if (handle) {
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      rememberShotNumber(number);
+      return;
+    }
+  }
+
+  // Fallback for browsers without the picker (Firefox/Safari): a plain download
+  // with the computed name. Whether a dialog appears is then the browser's own
+  // "ask where to save each file" setting, which we can't control from here.
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  rememberShotNumber(number);
 }
 
 window.addEventListener('resize', () => {
@@ -2466,6 +2708,25 @@ function applySetting(key, value) {
     case 'buildingRoughness':
       if (buildingMaterial) buildingMaterial.roughness = value;
       break;
+    case 'buildingMetalness':
+      if (buildingMaterial) buildingMaterial.metalness = value;
+      break;
+    case 'buildingSpecular':
+      if (buildingMaterial) buildingMaterial.specularIntensity = value;
+      break;
+    case 'buildingDiffuse':
+      // The uniform only exists once the material has compiled; the fallback keeps
+      // the value so the shader picks it up when it does.
+      if (buildingMaterial?.userData.shader) {
+        buildingMaterial.userData.shader.uniforms.uDiffuse.value = value;
+      }
+      break;
+    case 'buildingSheen':
+      if (buildingMaterial) buildingMaterial.sheen = value;
+      break;
+    case 'buildingSheenColor':
+      if (buildingMaterial) buildingMaterial.sheenColor.set(value);
+      break;
     case 'buildingGrain':
       if (buildingMaterial) buildingMaterial.bumpScale = value;
       break;
@@ -2518,7 +2779,11 @@ function applyTheme(id) {
 
   settings.theme = id;
   for (const [key, value] of Object.entries(themeValues(theme))) {
-    applySetting(key, value);
+    // Camera-motion keys belong to `view`/applyView; everything else is a look
+    // setting on `settings`/applySetting. Splitting here is what lets a single
+    // theme bundle drive both panels.
+    if (VIEW_KEYS.has(key)) applyView(key, value);
+    else applySetting(key, value);
   }
 }
 
@@ -2610,6 +2875,9 @@ function setupControls() {
 
   const syncAll = () => {
     syncInputs();
+    // A theme can now move camera-motion settings too, so the Camera panel's
+    // sliders have to be brought back into step alongside this one.
+    syncCameraPanel();
     themeButtons.forEach((button) => {
       button.classList.toggle('is-active', button.dataset.theme === settings.theme);
     });
@@ -2636,6 +2904,9 @@ function setupCamera() {
   const panel = document.querySelector('#nav');
   const { syncInputs } = wirePanel(panel, view, applyView);
 
+  // Let a theme switch resync these sliders (see applyTheme's VIEW_KEYS routing).
+  syncCameraPanel = syncInputs;
+
   const modeButtons = [...panel.querySelectorAll('[data-drag]')];
   const hint = panel.querySelector('[data-drag-hint]');
 
@@ -2654,7 +2925,14 @@ function setupCamera() {
 
   // "Reset view" flies the camera home; it deliberately leaves the speeds and the
   // drag mode alone, because those are how you like to fly, not where you are.
-  panel.querySelector('.panel-reset').addEventListener('click', resetView);
+  panel.querySelector('#nav-reset').addEventListener('click', resetView);
+
+  // Save grabs a JPG of the current view; the checkbox decides whether it's a 4K
+  // offscreen render or the window-resolution frame.
+  const save4k = panel.querySelector('#save-4k');
+  panel.querySelector('#save-image').addEventListener('click', () => {
+    saveScreenshot({ fourK: save4k.checked });
+  });
 
   // Push the defaults through the same path a click takes, so OrbitControls starts
   // out agreeing with what the panel is showing.
@@ -2667,5 +2945,12 @@ setupPlaceLabel();
 setupStats();
 setupControls();
 setupCamera();
-init();
+// The panels start hidden (they animate in when init reaches "Ready"). If init
+// throws unexpectedly, reveal them anyway so the controls never get stranded
+// invisible behind a failed load.
+init().catch((error) => {
+  console.error('Initialisation failed:', error);
+  hideLoadingIndicator();
+  document.body.classList.add('controls-revealed');
+});
 animate();
