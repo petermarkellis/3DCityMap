@@ -41,6 +41,33 @@ const MAX_BUILDINGS = 24000;
 // simulation, so the traffic can afford to be much denser than this was.
 const TAXI_COUNT = 1600;
 
+// Real NYC pickup demand, used to seed where taxis start their fares so the fleet's
+// density matches where cabs actually work rather than being spread evenly. Source
+// is the 2015 yellow-taxi trip records — the last era with true pickup lat/lon,
+// before TLC anonymised locations to ~260 zones — queried live from NYC Open Data's
+// Socrata API for this bbox. It's historical, not real-time (no such public feed
+// exists), and carries no route, so the taxis still drive themselves; only their
+// origins are data-driven. Everything degrades to the old random spawn if the fetch
+// fails, exactly like the Overpass fallback.
+const TAXI_DATA = {
+  endpoint: 'https://data.cityofnewyork.us/resource/2yzn-sicd.json',
+  limit: 30000,
+  // Optional Socrata APP TOKEN — a public rate-limit identifier, safe in a browser
+  // (NOT an API key secret, which a static site can't hide). Loaded from the
+  // git-ignored config.local.js via window.TAXI_APP_TOKEN so it stays out of the
+  // committed source; empty means anonymous, which is fine given the cache means
+  // ~one request per user. Get one at data.cityofnewyork.us → sign in → profile →
+  // Developer Settings → Create New App Token.
+  appToken: (typeof window !== 'undefined' && window.TAXI_APP_TOKEN) || '',
+};
+
+// A taxi "completes its fare" after this many seconds and is re-placed at a fresh
+// demand hotspot — what keeps the real-demand pattern anchored instead of diffusing
+// away as the cars random-walk. Long and staggered, so only a handful of the fleet
+// turn over per second and the churn stays invisible in aggregate. Only runs when
+// live demand loaded; without it the cars flow on undisturbed as before.
+const FARE_SECONDS = [120, 360];
+
 // Seconds for a road's glow to fade by half. Short leaves a clipped comet behind
 // each taxi; long lets the arterials stay lit end to end, so the picture reads as
 // accumulated flow rather than individual cars.
@@ -899,6 +926,9 @@ const OVERPASS_ENDPOINTS = [
 // a shorter abort would kill responses that were about to succeed.
 const REQUEST_TIMEOUT = 150000;
 const CACHE_NAME = 'taxitaxi-osm-v1';
+// Separate cache from the OSM data — different lifecycle, and clearing one shouldn't
+// evict the other. Used by loadTaxiDemand.
+const TAXI_CACHE_NAME = 'taxitaxi-taxidata-v1';
 
 function sortElements(payload) {
   const buildings = [];
@@ -2111,12 +2141,146 @@ function targetSpeed(taxi, edge) {
   return Math.min(want, Math.sqrt(2 * BRAKING * metres));
 }
 
+// ---------------------------------------------------------------------------
+// Real-demand seeding. Pickups from the taxi dataset are snapped to the nearest
+// road node and bucketed by hour of day; placeTaxi then starts cabs at those nodes
+// weighted by how many real pickups landed there, so the fleet clusters where cabs
+// actually work. Null until (and unless) the fetch succeeds — every consumer treats
+// null as "fall back to the uniform-random behaviour".
+// ---------------------------------------------------------------------------
+
+let demandModel = null; // { byHour: Int32Array[24], all: Int32Array }
+
+// Uniform bucket grid over the road nodes, so tens of thousands of pickups can be
+// snapped to the graph without an N×M scan. Cell ~60 m — a block or so — so the
+// 3×3 neighbourhood a lookup scans reliably contains the nearest node.
+function buildNodeGrid(cellSize) {
+  const grid = new Map();
+  const cellKey = (cx, cz) => `${cx},${cz}`;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const key = cellKey(Math.floor(nodes[i].x / cellSize), Math.floor(nodes[i].z / cellSize));
+    const cell = grid.get(key);
+    if (cell) cell.push(i);
+    else grid.set(key, [i]);
+  }
+  return { grid, cellSize, cellKey };
+}
+
+function nearestNode(index, x, z) {
+  const cx = Math.floor(x / index.cellSize);
+  const cz = Math.floor(z / index.cellSize);
+  let best = -1;
+  let bestDist = Infinity;
+  // Widen the search ring only if the inner cells came up empty (water, a park).
+  for (let radius = 1; radius <= 4 && best < 0; radius += 1) {
+    for (let dz = -radius; dz <= radius; dz += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const cell = index.grid.get(index.cellKey(cx + dx, cz + dz));
+        if (!cell) continue;
+        for (const i of cell) {
+          const dist = (nodes[i].x - x) ** 2 + (nodes[i].z - z) ** 2;
+          if (dist < bestDist) { bestDist = dist; best = i; }
+        }
+      }
+    }
+  }
+  return best;
+}
+
+// Live query to NYC Open Data (Socrata). CORS-open, so it runs straight from the
+// browser; the bbox filter and $limit keep it to a few MB. Returns the raw rows.
+//
+// The data is historical and never changes, so — like the Overpass loader — the
+// first response is kept in CacheStorage and every reload after reads it off the
+// disk: no multi-second fetch, and no repeat hits on Socrata's rate limit. The
+// cache key is synthetic and token-free, so adding or changing the app token
+// (which only affects rate limiting) never invalidates a good cached response.
+async function loadTaxiDemand() {
+  const where = `pickup_latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
+    + ` and pickup_longitude between ${BBOX.minLon} and ${BBOX.maxLon}`;
+  let url = `${TAXI_DATA.endpoint}?$select=pickup_longitude,pickup_latitude,pickup_datetime`
+    + `&$where=${encodeURIComponent(where)}&$limit=${TAXI_DATA.limit}`;
+  if (TAXI_DATA.appToken) url += `&$$app_token=${TAXI_DATA.appToken}`;
+
+  const cacheKey = `https://taxitaxi.local/taxidata?${BBOX.minLat},${BBOX.minLon},`
+    + `${BBOX.maxLat},${BBOX.maxLon}&limit=${TAXI_DATA.limit}`;
+
+  const cache = 'caches' in window ? await caches.open(TAXI_CACHE_NAME).catch(() => null) : null;
+  if (cache) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit.json();
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`taxi data HTTP ${response.status}`);
+  if (cache) await cache.put(cacheKey, response.clone());
+  return response.json();
+}
+
+// Snap every pickup to a node and index it by hour. The per-hour arrays hold one
+// entry per pickup, node indices repeated by frequency — so sampling one at random
+// is already weighted by real demand, no separate weight table needed.
+function buildDemandModel(rows) {
+  if (!Array.isArray(rows) || rows.length === 0 || nodes.length === 0) return null;
+
+  const grid = buildNodeGrid(6);
+  const byHour = Array.from({ length: 24 }, () => []);
+  const all = [];
+
+  for (const row of rows) {
+    const lon = parseFloat(row.pickup_longitude);
+    const lat = parseFloat(row.pickup_latitude);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+
+    const local = toLocal(lon, lat);
+    const node = nearestNode(grid, local.x, local.z);
+    if (node < 0) continue;
+
+    // Naive timestamps in NYC local time — the hour is chars 11–12 regardless of the
+    // browser's own zone, so slice it rather than risk a Date() shifting it.
+    const hour = parseInt((row.pickup_datetime || '').slice(11, 13), 10);
+    all.push(node);
+    if (hour >= 0 && hour < 24) byHour[hour].push(node);
+  }
+
+  if (all.length === 0) return null;
+  return {
+    byHour: byHour.map((list) => Int32Array.from(list)),
+    all: Int32Array.from(all),
+  };
+}
+
+// Pick a real pickup node for the current hour (falling back to all hours if that
+// bucket is thin) and hand back an edge leaving it plus the node it heads toward.
+// Null whenever there's no model or the chosen node is a dead end — placeTaxi then
+// keeps its old random behaviour.
+function demandStart() {
+  if (!demandModel) return null;
+
+  const hourPool = demandModel.byHour[new Date().getHours()];
+  const pool = hourPool && hourPool.length > 0 ? hourPool : demandModel.all;
+  if (pool.length === 0) return null;
+
+  const nodeIndex = pool[Math.floor(Math.random() * pool.length)];
+  const node = nodes[nodeIndex];
+  if (!node || node.edges.length === 0) return null;
+
+  const edgeIndex = node.edges[Math.floor(Math.random() * node.edges.length)];
+  return { edge: edgeIndex, node: edgeExit(edges[edgeIndex], nodeIndex) };
+}
+
+const fareSeconds = () => FARE_SECONDS[0] + Math.random() * (FARE_SECONDS[1] - FARE_SECONDS[0]);
+
 function placeTaxi(taxi) {
-  const index = Math.floor(Math.random() * edges.length);
+  // Start on a real pickup hotspot when demand loaded; otherwise anywhere on the map.
+  const start = demandStart();
+  const index = start ? start.edge : Math.floor(Math.random() * edges.length);
   const edge = edges[index];
   taxi.edge = index;
-  taxi.node = Math.random() < 0.5 ? edge.a : edge.b; // node it is heading toward
-  taxi.progress = Math.random();
+  // node it is heading toward — away from the pickup when seeded, either end when not.
+  taxi.node = start ? start.node : (Math.random() < 0.5 ? edge.a : edge.b);
+  // Seeded cabs start near the pickup node (small progress); unseeded ones mid-block.
+  taxi.progress = start ? Math.random() * 0.25 : Math.random();
   taxi.corner = 1; // no corner was taken to get here
   taxi.pending = null;
   taxi.speed = ROAD_CLASSES[edge.klass].speed * taxi.cruise;
@@ -2171,6 +2335,12 @@ function spawnTaxis() {
       stopAt: null,   // progress along the current edge to stop at, or null
       stopFor: 0,     // seconds to sit there once reached
       halt: 0,        // seconds left of the stop in progress
+
+      // Seconds until this cab finishes its fare and picks up again at a demand
+      // hotspot. Seeded across the whole range so the fleet's turnover is staggered
+      // from the first frame rather than all cabs respawning together. Only consumed
+      // when live demand loaded.
+      fare: Math.random() * FARE_SECONDS[1],
     };
     placeTaxi(taxi);
     taxis.push(taxi);
@@ -2217,6 +2387,18 @@ function depositHeat(edge, toB, amount) {
 function updateTaxis(dt) {
   for (let i = 0; i < taxis.length; i += 1) {
     const taxi = taxis[i];
+
+    // Fare complete: drop this cab and pick a new one up at a real hotspot. Gated on
+    // demand so the fallback fleet never teleports — it just flows as it always did.
+    if (demandModel) {
+      taxi.fare -= dt;
+      if (taxi.fare <= 0) {
+        placeTaxi(taxi);
+        taxi.fare = fareSeconds();
+        continue;
+      }
+    }
+
     let edge = edges[taxi.edge];
 
     // Commit to the next turn before reaching it, so there is something to brake
@@ -2425,6 +2607,20 @@ async function init() {
   setLoadingState(65, 'Extruding buildings…');
   await nextFrame();
   await addBuildings(data.buildings);
+
+  // Real pickup demand, if it loads. Non-fatal on purpose — a throttled or dead
+  // Socrata mirror just means the cabs spawn on the random walk, same as always.
+  setLoadingState(85, 'Reading taxi demand…');
+  await nextFrame();
+  try {
+    demandModel = buildDemandModel(await loadTaxiDemand());
+    if (demandModel) {
+      console.info(`Taxi demand: seeded from ${demandModel.all.length} real pickups.`);
+    }
+  } catch (error) {
+    console.warn('No live taxi demand; cabs spawn on the random walk:', error);
+    demandModel = null;
+  }
 
   setLoadingState(90, 'Dispatching taxis…');
   await nextFrame();

@@ -974,6 +974,11 @@
         }
       }
     </script>
+    <!-- Optional, git-ignored local config (see config.local.example.js). A classic
+         script so it runs before the deferred module below and can set globals like
+         window.TAXI_APP_TOKEN. Absent on a fresh clone — the resulting 404 is
+         harmless and the app just runs anonymously. -->
+    <script src="./config.local.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

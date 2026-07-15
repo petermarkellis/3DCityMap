@@ -1,3 +1,10 @@
 .DS_Store
 node_modules/
 .claude/settings.local.json
+
+# Never commit local secrets/keys. See note below — a static site can't read .env
+# at runtime, but this makes sure one never lands in the repo by accident.
+.env
+.env.*
+*.local.js
+config.local.js
