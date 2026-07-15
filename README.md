@@ -6,6 +6,8 @@ photograph of a city that never holds still. Buildings, roads, and the shoreline
 are pulled live from OpenStreetMap; everything else is drawn with Three.js and a
 handful of custom shaders.
 
+![Low-angle view of Manhattan at night, taxi light-trails threading the streets and the East River catching the light](screenshots/screenshot_b.jpg)
+
 ## What it does
 
 - **Live OpenStreetMap geometry.** Buildings and the street network are fetched
@@ -29,6 +31,11 @@ handful of custom shaders.
 - **Four themes**, switchable live: Orange burn (default), Blueprint, Green CRT,
   and Grayscale. A theme is just a bundle of the same values the sliders write, so
   you can pick one and hand-tweak from there.
+
+![Overhead view showing the street grid picked out by trails, with the rippled water surface along the shoreline](screenshots/screenshot_c.jpg)
+
+*Looking down the grid: each street is a drawn line the taxis light up, and the
+coastline-derived water ripples along the left edge.*
 
 ## Running it
 
@@ -63,6 +70,11 @@ The scene is driven with the mouse (or one/two fingers on a trackpad):
 By default: left-drag orbits, right-drag pans, scroll zooms. The Camera panel
 rebinds the left button while always leaving orbit or pan on the right, so you're
 never left with no way to turn the city.
+
+![Angled aerial view with the Look panel open on the left and the Camera panel on the right](screenshots/screenshot_a.jpg)
+
+*The Look panel (left) and Camera panel (right). Both re-tint with the active
+theme.*
 
 ## Project layout
 
