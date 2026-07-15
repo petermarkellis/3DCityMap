@@ -6,7 +6,7 @@ photograph of a city that never holds still. Buildings, roads, and the shoreline
 are pulled live from OpenStreetMap; everything else is drawn with Three.js and a
 handful of custom shaders.
 
-![Low-angle view of Manhattan at night, taxi light-trails threading the streets and the East River catching the light](screenshots/screenshot_b.jpg)
+![Wide aerial view of Manhattan at night rendered in 3D, taxi light-trails threading the entire street grid, with the Look and Camera control panels framing the city](screenshots/screenshot_d.jpg)
 
 ## What it does
 
