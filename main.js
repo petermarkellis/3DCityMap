@@ -89,9 +89,11 @@ const SKIPPED_HIGHWAYS = new Set([
 // ---------------------------------------------------------------------------
 
 const app = document.querySelector('#app');
-const loadingIndicator = document.querySelector('#loading-indicator');
-const loadingLabel = document.querySelector('[data-loading-label]');
-const loadingBar = document.querySelector('[data-loading-bar]');
+const loaderOverlay = document.querySelector('#loader-overlay');
+const loaderBar = document.querySelector('[data-loader-bar]');
+const loaderPct = document.querySelector('[data-loader-pct]');
+const loaderLog = document.querySelector('[data-loader-log]');
+const loaderContinue = document.querySelector('#loader-continue');
 
 const scene = new THREE.Scene();
 // Seed the sky/fog from the default theme rather than a hardcoded colour, so a fresh
@@ -550,6 +552,12 @@ const WATER_RANGE = 24;
 // World units per texel of the field, and therefore the finest shoreline it can hold.
 const WATER_TEXEL = 2.0;
 
+// Smallest `natural=water` pool worth rendering, in world units² (1 unit = 10 m, so
+// this is ~3 hectares). Inside this bbox the pools are fountains, memorial pools and
+// dry docks — little inland patches that read as stray water lapping the city. The
+// real rivers come from the coastline, not these, so anything below this is dropped.
+const MIN_POOL_AREA = 300;
+
 const waterUniforms = {
   uWaterField: { value: DRY_FIELD },
   uWaterRange: { value: WATER_RANGE },
@@ -560,7 +568,9 @@ const waterUniforms = {
   // what separates it from the asphalt: the road keeps its flat sheen, while the
   // water goes dark face-on and lights up at grazing angles, which is the whole
   // look of a river at night.
-  uWaterRoughness: { value: 0.09 },
+  // Roughness sets how tight the sun's reflection is: low was a hard, narrow beam,
+  // so lift it a touch to spread that into a broader, softer glitter cone.
+  uWaterRoughness: { value: 0.15 },
   uWaterMetalness: { value: 0.22 },
 
   // Wavelength of the largest swell, in world units, and how hard it tilts the
@@ -571,7 +581,7 @@ const waterUniforms = {
   // Tilt gently. Push it and the ripples stop scattering the reflection and start
   // shattering it, and the river turns to cottage cheese.
   uWaveScale: { value: 0.18 },
-  uWaveStrength: { value: 0.30 },
+  uWaveStrength: { value: 0.34 },
 
   // Wind. Isotropic noise gives a surface of round blobs, which is the one thing open
   // water never looks like — swell is always drawn out along the wind. Squashing the
@@ -1006,21 +1016,78 @@ function setupStats() {
   });
 }
 
-function setLoadingState(progress, label) {
-  if (!loadingIndicator || !loadingLabel || !loadingBar) return;
-  loadingIndicator.hidden = false;
-  loadingIndicator.classList.remove('is-dismissed'); // in case it's being shown again
-  loadingLabel.textContent = label;
-  loadingBar.style.width = `${Math.max(4, Math.min(100, progress))}%`;
+// The braille "grid of dots" spinner (as Homebrew et al use), cycled onto whatever
+// log line is currently in progress.
+const LOADER_SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+let loaderSpinnerFrame = 0;
+let loaderActiveSpin = null; // the spinner <span> of the running line, or null
+let loaderSpinnerTimer = 0;
+
+if (loaderLog) {
+  loaderSpinnerTimer = window.setInterval(() => {
+    loaderSpinnerFrame = (loaderSpinnerFrame + 1) % LOADER_SPINNER.length;
+    if (loaderActiveSpin) loaderActiveSpin.textContent = LOADER_SPINNER[loaderSpinnerFrame];
+  }, 80);
 }
 
-function hideLoadingIndicator() {
-  if (!loadingIndicator) return;
-  // Play the rotate-and-fade exit (see .is-dismissed), then remove it for real once
-  // the transition has finished so it stops taking layout.
-  loadingIndicator.classList.add('is-dismissed');
-  window.setTimeout(() => { loadingIndicator.hidden = true; }, 650);
+// Tick the previous line to a green check, since a new stage means the last finished.
+function completeLoaderLine() {
+  if (loaderActiveSpin) {
+    loaderActiveSpin.textContent = '✓';
+    loaderActiveSpin.classList.add('done');
+    loaderActiveSpin = null;
+  }
 }
+
+// Add a terminal line: a spinning cell (unless `done`) followed by the label.
+function addLoaderLine(label, done = false) {
+  if (!loaderLog) return;
+  const line = document.createElement('div');
+  line.className = 'loader-line';
+  const spin = document.createElement('span');
+  spin.className = 'loader-spin';
+  if (done) { spin.textContent = '✓'; spin.classList.add('done'); }
+  else { spin.textContent = LOADER_SPINNER[loaderSpinnerFrame]; loaderActiveSpin = spin; }
+  const text = document.createElement('span');
+  text.textContent = label;
+  line.append(spin, text);
+  loaderLog.append(line);
+  loaderLog.scrollTop = loaderLog.scrollHeight; // keep the newest line in view
+}
+
+// Each stage: fill the bar, finish the running line, and start a new one (or, at
+// 100%, drop a final "Ready" line and reveal the Continue button).
+function setLoadingState(progress, label) {
+  const pct = Math.max(0, Math.min(100, Math.round(progress)));
+  if (loaderBar) loaderBar.style.width = `${pct}%`;
+  if (loaderPct) loaderPct.textContent = `${pct}%`;
+
+  completeLoaderLine();
+  if (pct >= 100) {
+    addLoaderLine(label || 'Ready', true);
+    if (loaderContinue) loaderContinue.hidden = false;
+  } else {
+    addLoaderLine(label);
+  }
+}
+
+// Dismiss the loader and hand the scene over: fade the overlay out, swing the panels
+// in, and arm the flyover. Called by the Continue button, and as the fallback if
+// loading throws so the user is never trapped behind the overlay.
+let sceneRevealed = false;
+function revealScene() {
+  if (sceneRevealed) return;
+  sceneRevealed = true;
+  flyoverArmed = true;
+  window.clearInterval(loaderSpinnerTimer);
+  document.body.classList.add('controls-revealed');
+  if (loaderOverlay) {
+    loaderOverlay.classList.add('is-hidden');
+    window.setTimeout(() => loaderOverlay.remove(), 800);
+  }
+}
+
+if (loaderContinue) loaderContinue.addEventListener('click', revealScene);
 
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
@@ -1100,7 +1167,34 @@ async function overpassQuery(query, cachedLabel) {
   throw lastError ?? new Error('Overpass unavailable');
 }
 
+// Bundled snapshots of the map/demand data, served from our own host. Preferring
+// these means a first-time visitor gets a fast, reliable load instead of each one
+// hammering the live Overpass/Socrata APIs (which are slow to generate and rate
+// limited). Absent files fall straight through to the live fetch, so the app works
+// with or without them — run `node scripts/snapshot-data.mjs` to generate them.
+const SNAPSHOT_FILES = {
+  osm: 'data/osm.json',
+  water: 'data/water.json',
+  demand: 'data/taxi-demand.json',
+};
+
+async function loadSnapshot(path) {
+  try {
+    const response = await fetch(path);
+    if (!response.ok) return null; // not deployed — use the live API
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 async function loadOsmData() {
+  const snapshot = await loadSnapshot(SNAPSHOT_FILES.osm);
+  if (snapshot) {
+    mapSource = 'Bundled';
+    return sortElements(snapshot);
+  }
+
   const bbox = `${BBOX.minLat},${BBOX.minLon},${BBOX.maxLat},${BBOX.maxLon}`;
   const query = `[out:json][timeout:90];(way["building"](${bbox});way["highway"](${bbox}););out body geom;`;
 
@@ -1150,7 +1244,7 @@ async function loadWaterData() {
   // so a coastline clipped by the query still arrives whole.
   const query = `[out:json][timeout:90];(way["natural"="coastline"](${bbox});way["natural"="water"](${bbox});way["waterway"="riverbank"](${bbox});relation["natural"="water"](${bbox}););out body geom;`;
 
-  const { payload } = await overpassQuery(query);
+  const payload = await loadSnapshot(SNAPSHOT_FILES.water) ?? (await overpassQuery(query)).payload;
   const shoreline = [];
   const pools = [];
 
@@ -1199,7 +1293,7 @@ function closestOnSegment(px, pz, ax, az, bx, bz) {
 // it has heard about, and two sweeps — one down, one back up — are enough for every
 // texel to hear about the true nearest one from a neighbour). Linear in the grid,
 // and it comes out exact to within a fraction of a texel.
-function buildWaterField({ shoreline, pools }) {
+function buildWaterField({ shoreline, pools }, buildings = []) {
   const nx = Math.round(waterPlaneW / WATER_TEXEL);
   const nz = Math.round(waterPlaneD / WATER_TEXEL);
   const stepX = waterPlaneW / nx;
@@ -1337,6 +1431,14 @@ function buildWaterField({ shoreline, pools }) {
   const pad = Math.ceil(WATER_RANGE / WATER_TEXEL);
 
   for (const poly of pools) {
+    // Shoelace area; skip the little fountains and memorial pools that otherwise
+    // read as stray water in the middle of the city.
+    let area = 0;
+    for (let a = 0, b = poly.length - 1; a < poly.length; b = a, a += 1) {
+      area += (poly[b].x + poly[a].x) * (poly[b].z - poly[a].z);
+    }
+    if (Math.abs(area) / 2 < MIN_POOL_AREA) continue;
+
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of poly) {
       minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -1368,6 +1470,52 @@ function buildWaterField({ shoreline, pools }) {
         const bank = Math.sqrt(bankSq);
         const index = j * nx + i;
         signed[index] = Math.min(signed[index], inside ? -bank : bank);
+      }
+    }
+  }
+
+  // Buildings can't stand on water. Stamp their footprints — plus a margin that
+  // reaches across the street to the next block — as firmly dry land, overriding any
+  // inland swath the coastline flood mis-signed as water. This is the pool rasteriser
+  // inverted: land wins (max, positive) instead of water (min, negative). The city
+  // grid is dense, so the margins merge the footprints into one solid land mass, and
+  // the real rivers — which carry no buildings — are left untouched.
+  const LAND_STAMP_MARGIN = 6; // world units (~60 m); bridges the gaps between blocks
+  const LAND_STAMP_VALUE = 8;  // decodes to comfortably dry, past the shore blend + bias
+  const landPad = Math.ceil(LAND_STAMP_MARGIN / WATER_TEXEL);
+  for (const b of buildings) {
+    if (!b.geometry || b.geometry.length < 3) continue;
+    const poly = b.geometry.map(({ lon, lat }) => toLocal(lon, lat));
+
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of poly) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+
+    const i0 = Math.max(0, Math.floor((minX / waterPlaneW + 0.5) * nx) - landPad);
+    const i1 = Math.min(nx - 1, Math.ceil((maxX / waterPlaneW + 0.5) * nx) + landPad);
+    const j0 = Math.max(0, Math.floor((0.5 - maxZ / waterPlaneD) * nz) - landPad);
+    const j1 = Math.min(nz - 1, Math.ceil((0.5 - minZ / waterPlaneD) * nz) + landPad);
+
+    for (let j = j0; j <= j1; j += 1) {
+      for (let i = i0; i <= i1; i += 1) {
+        const px = worldX(i);
+        const pz = worldZ(j);
+
+        let inside = false;
+        let bankSq = Infinity;
+        for (let a = 0, e = poly.length - 1; a < poly.length; e = a, a += 1) {
+          const pa = poly[a];
+          const pb = poly[e];
+          if ((pa.z > pz) !== (pb.z > pz)
+            && px < ((pb.x - pa.x) * (pz - pa.z)) / (pb.z - pa.z) + pa.x) inside = !inside;
+          bankSq = Math.min(bankSq, closestOnSegment(px, pz, pa.x, pa.z, pb.x, pb.z).distSq);
+        }
+
+        if (inside || bankSq <= LAND_STAMP_MARGIN * LAND_STAMP_MARGIN) {
+          signed[j * nx + i] = Math.max(signed[j * nx + i], LAND_STAMP_VALUE);
+        }
       }
     }
   }
@@ -1529,7 +1677,8 @@ probeCamera.position.set(0, 40, 20);
 const probePMREM = new THREE.PMREMGenerator(renderer);
 probePMREM.compileCubemapShader();
 
-let probeEnv = null;
+let probeEnv = null;        // the prefiltered env texture handed to the buildings
+let probeEnvTarget = null;  // the PMREM render target it lives in — reused every update
 let probeClock = 0;
 
 // A cubemap of a mostly-black city carries far less irradiance than the painted
@@ -1581,9 +1730,12 @@ function updateReflectionProbe(dt) {
   if (buildingMesh) buildingMesh.visible = wasVisible;
   if (buildingEdges) buildingEdges.visible = edgesWereVisible;
 
-  const next = probePMREM.fromCubemap(probeTarget.texture).texture;
-  probeEnv?.dispose(); // fromCubemap allocates a fresh target every call
-  probeEnv = next;
+  // Reuse the same PMREM target every call (pass it back in) rather than letting
+  // fromCubemap allocate a fresh one and disposing the old — that alloc/free churn,
+  // 4×/second, was needless GPU-memory thrash and can flash a black frame on some
+  // drivers.
+  probeEnvTarget = probePMREM.fromCubemap(probeTarget.texture, probeEnvTarget);
+  probeEnv = probeEnvTarget.texture;
 
   // Only flag a recompile the first time, when the envMap define actually
   // changes. Swapping one texture for another of the same type does not need it,
@@ -2329,6 +2481,9 @@ function nearestNode(index, x, z) {
 // cache key is synthetic and token-free, so adding or changing the app token
 // (which only affects rate limiting) never invalidates a good cached response.
 async function loadTaxiDemand() {
+  const snapshot = await loadSnapshot(SNAPSHOT_FILES.demand);
+  if (snapshot) return snapshot;
+
   const where = `pickup_latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
     + ` and pickup_longitude between ${BBOX.minLon} and ${BBOX.maxLon}`;
   let url = `${TAXI_DATA.endpoint}?$select=pickup_longitude,pickup_latitude,pickup_datetime`
@@ -2748,7 +2903,7 @@ async function init() {
   setLoadingState(38, 'Charting the shoreline…');
   await nextFrame();
   try {
-    const field = buildWaterField(await loadWaterData());
+    const field = buildWaterField(await loadWaterData(), data.buildings);
     waterUniforms.uWaterField.value = field.texture;
     waterUniforms.uFieldTexel.value.set(1 / field.texture.image.width, 1 / field.texture.image.height);
 
@@ -2818,14 +2973,10 @@ async function init() {
     source: mapSource,
   });
 
+  // Everything's loaded: mark the log done and surface the Continue button. The
+  // reveal (panels in, flyover armed) happens when the user clicks it — see
+  // revealScene.
   setLoadingState(100, 'Ready');
-  flyoverArmed = true; // the flyover easter egg can fire now the scene is up
-  window.setTimeout(() => {
-    hideLoadingIndicator();
-    // Swing the control columns in as the loading overlay clears (see the
-    // .controls-revealed rules in index.html).
-    document.body.classList.add('controls-revealed');
-  }, 400);
   console.info(`${nodes.length} nodes, ${edges.length} road segments, ${activeTaxis}/${taxis.length} taxis active`);
 }
 
@@ -3153,6 +3304,10 @@ function applySetting(key, value) {
     case 'buildingsVisible':
       if (buildingMesh) buildingMesh.visible = value;
       if (buildingEdges) buildingEdges.visible = value && settings.showEdges;
+      // The shadow map is frozen with the buildings baked in, so hiding them would
+      // otherwise leave their shadows on the empty ground. Toggle the sun's casting
+      // to drop/restore the shadows with the buildings (the baked map is reused).
+      sun.castShadow = value;
       break;
     case 'buildingColor':
     case 'variationColorA':
@@ -3624,12 +3779,12 @@ setupPlaceLabel();
 setupStats();
 setupControls();
 setupCamera();
-// The panels start hidden (they animate in when init reaches "Ready"). If init
-// throws unexpectedly, reveal them anyway so the controls never get stranded
-// invisible behind a failed load.
+// The panels start hidden and the loader covers the screen until Continue. If init
+// throws unexpectedly, reveal the scene anyway so the user is never trapped behind
+// the overlay.
 init().catch((error) => {
   console.error('Initialisation failed:', error);
-  hideLoadingIndicator();
-  document.body.classList.add('controls-revealed');
+  if (loaderContinue) loaderContinue.hidden = false;
+  revealScene();
 });
 animate();

@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NYC 3D Map — Taxi Taxi</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
     <style>
       :root {
         color-scheme: dark;
@@ -38,34 +41,169 @@
         height: 100%;
       }
 
-      #loading-indicator {
+      /* ---- Loader overlay: covers the screen during load, dismissed by Continue ---- */
+      #loader-overlay {
         position: fixed;
-        left: 50%;
-        bottom: 20px;
-        z-index: 20;
+        inset: 0;
+        z-index: 100;
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 12px;
-        border: 1px solid var(--edge-soft);
-        border-radius: 999px;
-        background: rgba(10, 8, 6, 0.76);
-        backdrop-filter: blur(10px);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        justify-content: center;
+        padding: 24px;
+        background: radial-gradient(120% 90% at 50% 0%, #16202f 0%, #0a0d13 62%, #06080c 100%);
         color: var(--text);
-        font-size: 12px;
-        letter-spacing: 0.02em;
-        pointer-events: none;
-        /* Centred along the bottom. The rotateX stays in the transform at rest (0°)
-           so the dismiss transition below interpolates cleanly function-for-function. */
-        transform: translateX(-50%) perspective(500px) rotateX(0deg);
-        transition: transform 600ms ease, opacity 600ms ease;
+        transition: opacity 700ms ease;
       }
 
-      /* Exit once loading finishes: tip forward on the X axis and fade out. */
-      #loading-indicator.is-dismissed {
+      #loader-overlay.is-hidden {
         opacity: 0;
-        transform: translateX(-50%) perspective(500px) rotateX(90deg);
+        pointer-events: none;
+      }
+
+      .loader-panel {
+        width: min(620px, 100%);
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .loader-info h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      .loader-info p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.65;
+        color: var(--muted);
+      }
+
+      .loader-info a {
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+      }
+
+      .loader-info a:hover { border-bottom-color: var(--accent); }
+
+      .loader-progress {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .loader-progress-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .loader-progress-head [data-loader-pct] {
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .loader-bar {
+        height: 6px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+
+      .loader-bar span {
+        display: block;
+        width: 0%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--accent), var(--text));
+        transition: width 300ms ease;
+      }
+
+      .loader-terminal {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #05060a;
+      }
+
+      .loader-terminal-bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        background: rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .loader-terminal-bar i {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.18);
+      }
+
+      .loader-terminal-bar span { margin-left: 6px; }
+
+      .loader-log {
+        height: 168px;
+        overflow-y: auto;
+        padding: 12px;
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.7;
+        color: #cdd6e4;
+      }
+
+      .loader-line {
+        display: flex;
+        gap: 8px;
+        white-space: pre;
+      }
+
+      .loader-spin {
+        width: 1ch;
+        color: var(--accent);
+      }
+
+      .loader-spin.done { color: #63e08a; }
+
+      .loader-log::-webkit-scrollbar { width: 6px; }
+
+      .loader-log::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+      }
+
+      #loader-continue {
+        align-self: flex-start;
+        margin-top: 4px;
+        padding: 10px 22px;
+        border: 1px solid var(--edge);
+        border-radius: 9px;
+        background: var(--fill-strong);
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        cursor: pointer;
+        animation: loader-continue-in 450ms ease both;
+      }
+
+      #loader-continue:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+      @keyframes loader-continue-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: none; }
       }
 
       /* One-shot flyover: a flat plane crossing the screen bottom-to-top. Its base
@@ -126,48 +264,6 @@
         height: 120vw;
         transform: translate(-50%, -50%) rotate(-90deg);
         object-fit: cover;
-      }
-
-      .loading-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: var(--accent);
-        box-shadow: 0 0 12px var(--glow);
-        animation: pulse 1.2s ease-in-out infinite;
-      }
-
-      .loading-text {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        min-width: 140px;
-      }
-
-      .loading-label {
-        font-weight: 600;
-        color: var(--text);
-      }
-
-      .loading-bar {
-        width: 110px;
-        height: 4px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.12);
-        overflow: hidden;
-      }
-
-      .loading-bar span {
-        display: block;
-        width: 0%;
-        height: 100%;
-        background: linear-gradient(90deg, var(--accent) 0%, var(--text) 100%);
-        transition: width 220ms ease;
-      }
-
-      @keyframes pulse {
-        0%, 100% { transform: scale(0.9); opacity: 0.8; }
-        50% { transform: scale(1.15); opacity: 1; }
       }
 
       #place {
@@ -1266,13 +1362,39 @@
       </aside>
     </div>
 
-    <div id="loading-indicator" hidden>
-      <div class="loading-dot"></div>
-      <div class="loading-text">
-        <span class="loading-label" data-loading-label>Loading map…</span>
-        <div class="loading-bar" aria-hidden="true">
-          <span data-loading-bar></span>
-        </div>
+    <div id="loader-overlay">
+      <div class="loader-panel">
+        <!-- Info block -->
+        <section class="loader-info">
+          <h2>Taxi Taxi — a data experiment</h2>
+          <p>
+            A real-time 3D render of Manhattan, built from live
+            <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap</a>
+            geometry. The traffic is seeded from
+            <a href="https://data.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a>
+            — real yellow-taxi pick-up and drop-off records — so the fleet clusters where
+            cabs actually worked, shifting with the time of day.
+          </p>
+        </section>
+
+        <!-- Progress block -->
+        <section class="loader-progress">
+          <div class="loader-progress-head">
+            <span>Loading</span>
+            <span data-loader-pct>0%</span>
+          </div>
+          <div class="loader-bar"><span data-loader-bar></span></div>
+        </section>
+
+        <!-- Terminal block -->
+        <section class="loader-terminal" aria-hidden="true">
+          <div class="loader-terminal-bar">
+            <i></i><i></i><i></i><span>build log</span>
+          </div>
+          <div class="loader-log" data-loader-log></div>
+        </section>
+
+        <button id="loader-continue" type="button" hidden>Continue</button>
       </div>
     </div>
 
