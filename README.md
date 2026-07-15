@@ -20,6 +20,16 @@ handful of custom shaders.
   fraction of them pause mid-block and pull away again, and each driver has a
   slightly different cruising speed that drifts over time, so the flow reads as
   traffic rather than a mechanism.
+- **Seeded by real pickup demand.** Where the cabs start their fares is drawn from
+  actual 2015 NYC yellow-taxi pickup records — the last era with true pickup
+  lat/lon, before the city anonymised locations to zones — queried live from
+  [NYC Open Data](https://opendata.cityofnewyork.us/), snapped to the nearest road
+  node and weighted by hour of day. So the fleet clusters where cabs really work
+  (midtown, the terminals, downtown) instead of spreading evenly, and the pattern
+  shifts with the time of day you load it. It's historical, not real-time — no
+  public live taxi feed exists — and the records carry no route, so the cabs still
+  navigate themselves; only their origins are real. The response is cached in
+  CacheStorage, and it falls back to uniform-random spawning if the query fails.
 - **Water.** OpenStreetMap doesn't map the Hudson and East Rivers as fillable
   areas — they're `natural=coastline` lines. The water is derived from them as a
   signed-distance field over the ground plane, then rendered with an animated
@@ -82,6 +92,8 @@ theme.*
 index.html          Markup, styles, and the Three.js import map
 main.js             The whole application: scene, OSM loading, taxi
                     simulation, water field, shaders, and UI wiring
+config.local.example.js  Template for the optional NYC Open Data app token;
+                    copy to config.local.js (git-ignored) and fill in
 themes/
   index.js          Theme registry — add a file here and list it to add a theme
   ember_theme.js    Orange burn (default)
@@ -101,15 +113,38 @@ The city, its bounding box, and the taxi count are constants at the top of
   the location label follows; the whole scene rebuilds around the new box.
 - `TAXI_COUNT` — how many taxis to dispatch.
 - `LOCATION` — the name/region shown top-right.
+- `TAXI_DATA` — the NYC Open Data endpoint and row limit for the pickup demand, plus
+  an optional app token (see below).
+
+### Taxi demand token (optional)
+
+The pickup-demand query runs against NYC Open Data's [Socrata](https://dev.socrata.com/)
+API and works with **no setup** — anonymously, and only once per browser thanks to
+the cache. If you want to avoid the shared anonymous rate limit on first loads, add a
+free **app token** (a public rate-limit identifier, *not* a credential):
+
+1. At [data.cityofnewyork.us](https://data.cityofnewyork.us/), sign in → profile →
+   **Developer Settings → App Tokens → Create New App Token** (keep *Public* checked).
+2. Copy `config.local.example.js` to `config.local.js` and paste the token into
+   `window.TAXI_APP_TOKEN`.
+
+`config.local.js` is git-ignored. Never put a Socrata **API key secret** there — a
+static site can't hide it.
 
 ## Built with
 
 - [Three.js](https://threejs.org/) r160 (WebGL), via CDN — no bundler
 - [OpenStreetMap](https://www.openstreetmap.org/) data through the
   [Overpass API](https://overpass-api.de/)
+- [NYC Open Data](https://opendata.cityofnewyork.us/) taxi trip records via the
+  [Socrata](https://dev.socrata.com/) API
 - Custom GLSL for the road trails, the water swell, and the land rise
 
 ## Credits
 
 Map data © OpenStreetMap contributors, available under the
 [Open Database License](https://www.openstreetmap.org/copyright).
+
+Taxi trip records from the
+[NYC Taxi & Limousine Commission](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page),
+via [NYC Open Data](https://opendata.cityofnewyork.us/).
