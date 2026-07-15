@@ -972,12 +972,17 @@ function setupStats() {
 function setLoadingState(progress, label) {
   if (!loadingIndicator || !loadingLabel || !loadingBar) return;
   loadingIndicator.hidden = false;
+  loadingIndicator.classList.remove('is-dismissed'); // in case it's being shown again
   loadingLabel.textContent = label;
   loadingBar.style.width = `${Math.max(4, Math.min(100, progress))}%`;
 }
 
 function hideLoadingIndicator() {
-  if (loadingIndicator) loadingIndicator.hidden = true;
+  if (!loadingIndicator) return;
+  // Play the rotate-and-fade exit (see .is-dismissed), then remove it for real once
+  // the transition has finished so it stops taking layout.
+  loadingIndicator.classList.add('is-dismissed');
+  window.setTimeout(() => { loadingIndicator.hidden = true; }, 650);
 }
 
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
@@ -3151,15 +3156,56 @@ function resolveTheme(id) {
   return THEMES[id] || customThemes.find((theme) => theme.id === id) || null;
 }
 
+// Preset swatch colours offered in the save dialog — neon-to-pastel, distinct
+// enough to tell saved themes apart at a glance.
+const THEME_SWATCHES = [
+  '#ff5ec8', '#ff4d97', '#ff6f61', '#ff9f45', '#ffe066',
+  '#c1f25e', '#6ee7a8', '#3ee0c8', '#5cd6ff', '#6c9bff',
+  '#8f7bff', '#b98cff', '#e58cff', '#ffb3d1', '#a8ecd6',
+  '#ffffff', '#e6e9ef', '#c2c7d0', '#9ba1ac',
+];
+
 // Snapshot the current look as a saveable bundle, reading each key from wherever it
-// lives (camera keys on `view`, everything else on `settings`). The swatch dot is
-// the accent, the theme's signature colour.
-function captureTheme(label) {
-  const theme = { id: `custom-${Date.now()}`, label, swatch: settings.accent };
+// lives (camera keys on `view`, everything else on `settings`). `swatch` is the dot
+// colour chosen in the dialog; it falls back to the accent.
+function captureTheme(label, swatch) {
+  const theme = { id: `custom-${Date.now()}`, label, swatch: swatch || settings.accent };
   for (const key of THEME_VALUE_KEYS) {
     theme[key] = VIEW_KEYS.has(key) ? view[key] : settings[key];
   }
   return theme;
+}
+
+// A bundle is importable if it has a name and at least one recognised theme value —
+// enough to reject unrelated JSON without being fussy about which keys are present.
+function isValidTheme(candidate) {
+  return candidate && typeof candidate === 'object'
+    && typeof candidate.label === 'string'
+    && THEME_VALUE_KEYS.some((key) => key in candidate);
+}
+
+// Download the saved themes as one JSON file — a backup, or something to hand to
+// another browser (localStorage doesn't travel between them).
+function exportThemes() {
+  const blob = new Blob([JSON.stringify(customThemes, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'taxitaxi-themes.json';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// Merge bundles from a parsed file (a single theme or an array), giving each a fresh
+// id so an import can never collide with a theme already saved. Returns how many
+// were added.
+function mergeImportedThemes(data) {
+  const incoming = (Array.isArray(data) ? data : [data]).filter(isValidTheme);
+  for (const theme of incoming) {
+    customThemes = [...customThemes, { ...theme, id: `custom-${Date.now()}-${customThemes.length}` }];
+  }
+  if (incoming.length > 0) persistCustomThemes();
+  return incoming.length;
 }
 
 function applyTheme(id) {
@@ -3239,6 +3285,67 @@ function wirePanel(panel, state, apply) {
   return { syncInputs: () => inputs.forEach(syncInput) };
 }
 
+// Builds the save-theme dialog once: fills the swatch grid, tracks the chosen colour
+// and the live name counter, and on submit captures the current look under that name
+// and colour. Returns a function that opens it; `onSaved` runs after a save so the
+// caller can re-render the theme row.
+function setupSaveThemeDialog(onSaved) {
+  const dialog = document.querySelector('#save-theme-dialog');
+  const form = dialog.querySelector('form');
+  const nameInput = dialog.querySelector('#save-theme-name');
+  const counter = dialog.querySelector('#save-theme-counter');
+  const grid = dialog.querySelector('#save-theme-swatches');
+  const customInput = dialog.querySelector('#save-theme-custom');
+  const customSwatch = dialog.querySelector('.custom-swatch');
+
+  let selectedColor = THEME_SWATCHES[0];
+
+  // Single-select across the presets and the custom picker: passing a preset element
+  // highlights it, passing null means the custom picker is the active choice.
+  const selectColor = (color, presetEl) => {
+    selectedColor = color;
+    grid.querySelectorAll('.swatch-option').forEach((el) => {
+      el.classList.toggle('is-selected', el === presetEl);
+    });
+    customSwatch.classList.toggle('is-selected', presetEl === null);
+  };
+
+  const presetEls = THEME_SWATCHES.map((color) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'swatch-option';
+    option.style.color = color; // drives the CSS glow
+    option.style.background = color;
+    option.title = color;
+    option.addEventListener('click', () => selectColor(color, option));
+    grid.append(option);
+    return option;
+  });
+
+  customInput.addEventListener('input', () => selectColor(customInput.value, null));
+  nameInput.addEventListener('input', () => { counter.textContent = `${nameInput.value.length}/10`; });
+  dialog.querySelector('.dialog-cancel').addEventListener('click', () => dialog.close());
+
+  // method="dialog" closes the dialog on submit; this runs first and does the save.
+  form.addEventListener('submit', () => {
+    const label = nameInput.value.trim() || `Theme ${customThemes.length + 1}`;
+    const theme = captureTheme(label, selectedColor);
+    customThemes = [...customThemes, theme];
+    persistCustomThemes();
+    settings.theme = theme.id; // current settings already *are* the captured values
+    onSaved();
+  });
+
+  return () => {
+    nameInput.value = '';
+    counter.textContent = '0/10';
+    customInput.value = THEME_SWATCHES[0];
+    selectColor(THEME_SWATCHES[0], presetEls[0]);
+    dialog.showModal();
+    nameInput.focus();
+  };
+}
+
 function setupControls() {
   const panel = document.querySelector('#panel');
   const themeRow = panel.querySelector('.themes');
@@ -3289,6 +3396,9 @@ function setupControls() {
     return button;
   };
 
+  // Opens the save-theme modal; on save it captures the look and re-renders the row.
+  const openSaveDialog = setupSaveThemeDialog(() => renderThemes());
+
   const renderThemes = () => {
     themeRow.replaceChildren();
     for (const theme of THEME_LIST) themeRow.append(makeThemeButton(theme, false));
@@ -3297,21 +3407,49 @@ function setupControls() {
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'theme-save';
-    save.textContent = '+ Save current';
+    save.textContent = '+ Save theme';
     save.title = 'Save the current settings as a new theme';
-    save.addEventListener('click', () => {
-      const suggested = `My theme ${customThemes.length + 1}`;
-      const label = window.prompt('Name this theme', suggested);
-      if (label === null) return; // cancelled
-      const theme = captureTheme(label.trim() || suggested);
-      customThemes = [...customThemes, theme];
-      persistCustomThemes();
-      // Nothing to apply — the current settings *are* the captured values; just mark
-      // the new theme active.
-      settings.theme = theme.id;
-      renderThemes();
-    });
+    save.addEventListener('click', () => openSaveDialog());
     themeRow.append(save);
+
+    // Export only makes sense once there's something saved; Import is always offered.
+    if (customThemes.length > 0) {
+      const exportButton = document.createElement('button');
+      exportButton.type = 'button';
+      exportButton.className = 'theme-io';
+      exportButton.textContent = 'Export';
+      exportButton.title = 'Download your saved themes as a .json file';
+      exportButton.addEventListener('click', exportThemes);
+      themeRow.append(exportButton);
+    }
+
+    const importButton = document.createElement('button');
+    importButton.type = 'button';
+    importButton.className = 'theme-io';
+    importButton.textContent = 'Import';
+    importButton.title = 'Load saved themes from a .json file';
+    importButton.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'application/json,.json';
+      input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const added = mergeImportedThemes(JSON.parse(reader.result));
+            if (added > 0) renderThemes();
+            else window.alert('No themes found in that file.');
+          } catch {
+            window.alert('That file is not a valid themes export.');
+          }
+        };
+        reader.readAsText(file);
+      });
+      input.click();
+    });
+    themeRow.append(importButton);
 
     syncAll();
   };

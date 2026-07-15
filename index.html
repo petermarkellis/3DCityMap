@@ -40,7 +40,7 @@
 
       #loading-indicator {
         position: fixed;
-        right: 20px;
+        left: 50%;
         bottom: 20px;
         z-index: 20;
         display: flex;
@@ -56,6 +56,16 @@
         font-size: 12px;
         letter-spacing: 0.02em;
         pointer-events: none;
+        /* Centred along the bottom. The rotateX stays in the transform at rest (0°)
+           so the dismiss transition below interpolates cleanly function-for-function. */
+        transform: translateX(-50%) perspective(500px) rotateX(0deg);
+        transition: transform 600ms ease, opacity 600ms ease;
+      }
+
+      /* Exit once loading finishes: tip forward on the X axis and fade out. */
+      #loading-indicator.is-dismissed {
+        opacity: 0;
+        transform: translateX(-50%) perspective(500px) rotateX(90deg);
       }
 
       .loading-dot {
@@ -625,11 +635,16 @@
         box-shadow: 0 0 7px currentColor;
       }
 
-      /* "Save current" spans the row and is dashed, marking it an action, not a preset. */
-      .panel .themes .theme-save {
-        grid-column: 1 / -1;
+      /* Actions (Save / Export / Import) are dashed and centred, marking them apart
+         from the preset buttons. Save spans the row; Export and Import share one. */
+      .panel .themes .theme-save,
+      .panel .themes .theme-io {
         justify-content: center;
         border-style: dashed;
+      }
+
+      .panel .themes .theme-save {
+        grid-column: 1 / -1;
       }
 
       /* Delete "×" on a saved theme, pushed to the button's trailing edge. */
@@ -645,6 +660,133 @@
       .panel .themes .theme-delete:hover {
         color: var(--text);
         background: rgba(255, 255, 255, 0.14);
+      }
+
+      /* Save-theme modal. */
+      .theme-dialog {
+        width: min(320px, 92vw);
+        padding: 0;
+        border: 1px solid var(--edge);
+        border-radius: 14px;
+        background: rgba(14, 15, 19, 0.98);
+        color: var(--text);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      }
+
+      .theme-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(2px);
+      }
+
+      .theme-dialog form {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 18px;
+      }
+
+      .theme-dialog h3 {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .dialog-field {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .dialog-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .dialog-label em {
+        font-style: normal;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #save-theme-name {
+        padding: 8px 10px;
+        border: 1px solid var(--edge-soft);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        font: inherit;
+      }
+
+      #save-theme-name:focus-visible {
+        outline: 1px solid var(--accent);
+      }
+
+      .swatch-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 7px;
+      }
+
+      .swatch-option {
+        /* 80% of the cell — 20% smaller than filling it — and centred, which also
+           leaves room for the selection ring to sit clear of its neighbours. */
+        width: 80%;
+        aspect-ratio: 1;
+        justify-self: center;
+        align-self: center;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 0 6px -1px currentColor;
+      }
+
+      /* outline-offset leaves a gap between the colour and the white ring, so the
+         selection reads clearly even on light swatches. */
+      .swatch-option.is-selected {
+        outline: 2px solid var(--text);
+        outline-offset: 2px;
+      }
+
+      .custom-swatch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .custom-swatch.is-selected {
+        color: var(--text);
+      }
+
+      .custom-swatch input[type="color"] {
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid var(--edge-soft);
+        border-radius: 6px;
+        background: none;
+        cursor: pointer;
+      }
+
+      .custom-swatch.is-selected input[type="color"] {
+        outline: 2px solid var(--text);
+        outline-offset: 2px;
+      }
+
+      /* Buttons reuse .panel-reset (the "Reset to defaults" style) for a consistent
+         look; this only owns their layout. */
+      .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
       }
 
       /* The drag-mode selector. A row of radio-ish buttons rather than a <select>,
@@ -1073,6 +1215,30 @@
         </div>
       </div>
     </div>
+
+    <!-- Save-theme dialog. The swatch grid is filled from THEME_SWATCHES in main.js. -->
+    <dialog id="save-theme-dialog" class="theme-dialog">
+      <form method="dialog">
+        <h3>Save theme</h3>
+        <label class="dialog-field">
+          <span class="dialog-label">Name <em id="save-theme-counter">0/10</em></span>
+          <input type="text" id="save-theme-name" maxlength="10" placeholder="My theme" autocomplete="off" />
+        </label>
+        <div class="dialog-field">
+          <span class="dialog-label">Colour</span>
+          <div class="swatch-grid" id="save-theme-swatches"></div>
+          <label class="custom-swatch">
+            <input type="color" id="save-theme-custom" value="#ff5ec8" />
+            <span>Custom colour…</span>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="dialog-cancel panel-reset">Cancel</button>
+          <button type="submit" class="dialog-save panel-reset">Save theme</button>
+        </div>
+      </form>
+    </dialog>
+
     <script type="importmap">
       {
         "imports": {

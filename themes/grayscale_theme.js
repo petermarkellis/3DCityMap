@@ -21,7 +21,7 @@ export default {
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#9aa4b0', envIntensity: 1.4,
-  background: '#050506', groundColor: '#08090a',
+  background: '#83838e', groundColor: '#08090a',
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
