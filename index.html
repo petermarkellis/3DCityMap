@@ -625,6 +625,28 @@
         box-shadow: 0 0 7px currentColor;
       }
 
+      /* "Save current" spans the row and is dashed, marking it an action, not a preset. */
+      .panel .themes .theme-save {
+        grid-column: 1 / -1;
+        justify-content: center;
+        border-style: dashed;
+      }
+
+      /* Delete "×" on a saved theme, pushed to the button's trailing edge. */
+      .panel .themes .theme-delete {
+        margin-left: auto;
+        padding: 0 3px;
+        border-radius: 4px;
+        font-size: 13px;
+        line-height: 1;
+        color: var(--muted);
+      }
+
+      .panel .themes .theme-delete:hover {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.14);
+      }
+
       /* The drag-mode selector. A row of radio-ish buttons rather than a <select>,
          because this is the one control you reach for mid-drag and it should be one
          click, not two. Grid rather than flex so the three stay equal width and the

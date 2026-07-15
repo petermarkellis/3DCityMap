@@ -3112,8 +3112,58 @@ function applySetting(key, value) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Custom themes. Saved to localStorage (no server, and a static page can't write
+// real files) as full setting bundles — the exact shape of the built-in theme
+// files — so they slot into applyTheme and the reset button with no special cases.
+// The built-in files are never touched, so "Reset to defaults" still restores
+// whichever palette, built-in or saved, you're currently on.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_THEMES_KEY = 'taxitaxi_custom_themes_v1';
+
+// The value keys a theme bundle carries — everything in a built-in theme but its
+// identity fields. Camera-motion keys live on `view`; the rest on `settings`.
+const THEME_VALUE_KEYS = Object.keys(DEFAULT_THEME)
+  .filter((key) => key !== 'id' && key !== 'label' && key !== 'swatch');
+
+function loadCustomThemes() {
+  try {
+    const list = JSON.parse(localStorage.getItem(CUSTOM_THEMES_KEY));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+let customThemes = loadCustomThemes();
+
+function persistCustomThemes() {
+  try {
+    localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customThemes));
+  } catch (error) {
+    console.warn('Could not persist custom themes:', error);
+  }
+}
+
+// Built-in first, so a saved theme can never shadow a built-in id.
+function resolveTheme(id) {
+  return THEMES[id] || customThemes.find((theme) => theme.id === id) || null;
+}
+
+// Snapshot the current look as a saveable bundle, reading each key from wherever it
+// lives (camera keys on `view`, everything else on `settings`). The swatch dot is
+// the accent, the theme's signature colour.
+function captureTheme(label) {
+  const theme = { id: `custom-${Date.now()}`, label, swatch: settings.accent };
+  for (const key of THEME_VALUE_KEYS) {
+    theme[key] = VIEW_KEYS.has(key) ? view[key] : settings[key];
+  }
+  return theme;
+}
+
 function applyTheme(id) {
-  const theme = THEMES[id];
+  const theme = resolveTheme(id);
   if (!theme) return;
 
   settings.theme = id;
@@ -3128,24 +3178,6 @@ function applyTheme(id) {
 
 // The buttons are built from the bundles rather than written out in the markup,
 // so a new theme file is the only edit needed to get a new button.
-function buildThemeButtons(panel) {
-  const row = panel.querySelector('.themes');
-
-  row.replaceChildren(...THEME_LIST.map((theme) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.theme = theme.id;
-
-    const swatch = document.createElement('i');
-    swatch.style.background = theme.swatch;
-    button.append(swatch, theme.label);
-
-    return button;
-  }));
-
-  return [...row.querySelectorAll('[data-theme]')];
-}
-
 // Everything both cards do the same way: bind the [data-setting] inputs to a state
 // object, keep the readouts and the filled track in step, and run the collapse
 // chevrons. The cards differ only in what state they own and what applying a key
@@ -3209,7 +3241,7 @@ function wirePanel(panel, state, apply) {
 
 function setupControls() {
   const panel = document.querySelector('#panel');
-  const themeButtons = buildThemeButtons(panel);
+  const themeRow = panel.querySelector('.themes');
   const { syncInputs } = wirePanel(panel, settings, applySetting);
 
   const syncAll = () => {
@@ -3219,26 +3251,79 @@ function setupControls() {
     syncCameraPanel();
     // The time slider carries a formatted readout wirePanel doesn't know how to fill.
     syncTimeControl();
-    themeButtons.forEach((button) => {
+    themeRow.querySelectorAll('[data-theme]').forEach((button) => {
       button.classList.toggle('is-active', button.dataset.theme === settings.theme);
     });
   };
 
-  for (const button of themeButtons) {
+  const makeThemeButton = (theme, isCustom) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.theme = theme.id;
+
+    const swatch = document.createElement('i');
+    swatch.style.background = theme.swatch;
+    button.append(swatch, document.createTextNode(theme.label));
     button.addEventListener('click', () => {
-      applyTheme(button.dataset.theme);
+      applyTheme(theme.id);
       syncAll();
     });
-  }
+
+    if (isCustom) {
+      // A saved theme carries a delete affordance; stopPropagation keeps the click
+      // off the button's own "select this theme" handler.
+      const remove = document.createElement('span');
+      remove.className = 'theme-delete';
+      remove.textContent = '×';
+      remove.title = 'Delete this theme';
+      remove.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (!window.confirm(`Delete theme “${theme.label}”?`)) return;
+        if (settings.theme === theme.id) applyTheme(DEFAULT_THEME.id);
+        customThemes = customThemes.filter((entry) => entry.id !== theme.id);
+        persistCustomThemes();
+        renderThemes();
+      });
+      button.append(remove);
+    }
+    return button;
+  };
+
+  const renderThemes = () => {
+    themeRow.replaceChildren();
+    for (const theme of THEME_LIST) themeRow.append(makeThemeButton(theme, false));
+    for (const theme of customThemes) themeRow.append(makeThemeButton(theme, true));
+
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'theme-save';
+    save.textContent = '+ Save current';
+    save.title = 'Save the current settings as a new theme';
+    save.addEventListener('click', () => {
+      const suggested = `My theme ${customThemes.length + 1}`;
+      const label = window.prompt('Name this theme', suggested);
+      if (label === null) return; // cancelled
+      const theme = captureTheme(label.trim() || suggested);
+      customThemes = [...customThemes, theme];
+      persistCustomThemes();
+      // Nothing to apply — the current settings *are* the captured values; just mark
+      // the new theme active.
+      settings.theme = theme.id;
+      renderThemes();
+    });
+    themeRow.append(save);
+
+    syncAll();
+  };
+
+  renderThemes();
 
   panel.querySelector('.panel-reset').addEventListener('click', () => {
-    // Back to the theme's own baseline, not to the ember theme — "reset" should
-    // undo your tweaks, not silently drag you off the palette you picked.
+    // Back to the theme's own baseline — for a saved theme, its saved values; for a
+    // built-in, the file's. "Reset" undoes your tweaks without leaving the palette.
     applyTheme(settings.theme);
     syncAll();
   });
-
-  syncAll();
 }
 
 function setupCamera() {
