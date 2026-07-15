@@ -16,7 +16,7 @@ export default {
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
   // Only place a pure-white head is right: there's no hue to preserve.
-  trailTail: '#7d848d', trailHead: '#3d9fdb',
+  trailTail: '#ebb9b9', trailHead: '#ff2929',
   trailDecay: 'long', trailOpacity: 0.82,
 
   // Environment — reflection colour/strength, plus the sky and floor colours.

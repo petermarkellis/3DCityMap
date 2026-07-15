@@ -11,7 +11,7 @@ export default {
   accent: '#ff8c2a',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 0.90, contrast: 1.00, bloom: 0.55,
+  exposure: 0.69, contrast: 1.00, bloom: 0.55,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
@@ -25,7 +25,7 @@ export default {
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
-  sunColor: '#ffd0a0', sunIntensity: 0.45,
+  sunColor: '#ffd0a0', sunIntensity: 2.48,
   skyLight: '#394760', groundLight: '#4a2410',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen

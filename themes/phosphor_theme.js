@@ -21,8 +21,8 @@ export default {
   trailDecay: 'long', trailOpacity: 0.82,
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
-  envColor: '#00e070', envIntensity: 1.5,
-  background: '#1f4234', groundColor: '#45594e',
+  envColor: '#aadac3', envIntensity: 1.5,
+  background: '#30403a', groundColor: '#45594e',
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
@@ -35,10 +35,10 @@ export default {
   buildingRoughness: 0.72, buildingMetalness: 0.15,
   buildingSpecular: 1.00, buildingDiffuse: 1.00,
   buildingSheen: 0.40, buildingGrain: 0.35, buildingVariation: 0.35,
-  buildingColor: '#33714d', edgeColor: '#3f8f63', showEdges: true,
+  buildingColor: '#304137', edgeColor: '#526f5f', showEdges: true,
   // A dim green sheen so the clay sits in the phosphor glow.
   buildingSheenColor: '#16342a',
-  variationColorA: '#1e4b33', variationColorB: '#438a5f', variationColorC: '#2a6142',
+  variationColorA: '#1e4b33', variationColorB: '#203328', variationColorC: '#0f291a',
 
   // Camera — how the view moves (the right-hand Camera panel). Speeds and damping
   // are the Motion controls; autoOrbit is the Auto-orbit drift. Drag mode stays a

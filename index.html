@@ -68,6 +68,66 @@
         transform: translateX(-50%) perspective(500px) rotateX(90deg);
       }
 
+      /* One-shot flyover: a flat plane crossing the screen bottom-to-top. Its base
+         transform parks it below the viewport until the animation runs. */
+      #plane-flyover {
+        position: fixed;
+        top: 0;
+        left: 50%;
+        width: min(1228px, 90vw);
+        /* Fixes the height (= width × 865/776) even before the image loads, so the
+           -100% exit below always resolves to the plane's true height. */
+        aspect-ratio: 776 / 865;
+        z-index: 30;
+        pointer-events: none;
+        transform: translate(-50%, 120vh);
+      }
+
+      #plane-flyover.is-flying {
+        animation: plane-fly 3s linear forwards;
+      }
+
+      /* Exit is the plane's own height (-100%) plus a margin, not a fixed vh — so the
+         tail always clears the top of the screen no matter how large the plane is. */
+      @keyframes plane-fly {
+        from { transform: translate(-50%, 120vh); }
+        to { transform: translate(-50%, calc(-100% - 15vh)); }
+      }
+
+      /* Cloud video layer for the flyover, one z-index below the plane so it passes
+         above it. `mix-blend-mode: screen` keys out the blue sky (it only adds light,
+         so the dark sky contributes little and the white clouds pop). It sits on the
+         container — not the video — because a blend mode on a child of this
+         stacking-context-forming element would blend within the group, not with the
+         scene behind it. The is-visible opacity is the effect's overall strength. */
+      #flyover-clouds {
+        position: fixed;
+        inset: 0;
+        z-index: 29;
+        pointer-events: none;
+        overflow: hidden;
+        opacity: 0;
+        mix-blend-mode: lighten;
+        transition: opacity 1.4s ease;
+      }
+
+      #flyover-clouds.is-visible {
+        opacity: 0.6;
+      }
+
+      /* The footage is portrait, so it's sized with width/height swapped (100vh ×
+         100vw) and turned 90° about the centre, which lands it filling the viewport.
+         object-fit: cover crops rather than stretches. */
+      .flyover-video {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 120vh;
+        height: 120vw;
+        transform: translate(-50%, -50%) rotate(-90deg);
+        object-fit: cover;
+      }
+
       .loading-dot {
         width: 8px;
         height: 8px;

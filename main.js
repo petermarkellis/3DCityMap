@@ -118,6 +118,14 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.9;
+
+// Soft shadows from the sun. The city and the sun are both static, so the shadow map
+// is rendered once (after the buildings load) and then frozen — autoUpdate off keeps
+// it off the per-frame budget entirely. PCFSoft + a small radius gives the soft edge.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;
+
 app.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -465,6 +473,22 @@ scene.add(ambient);
 const sun = new THREE.DirectionalLight(settings.sunColor, settings.sunIntensity);
 sun.position.set(-300, 400, 200);
 scene.add(sun);
+
+// Cast soft shadows across the whole city. The ortho frustum is centred on the
+// origin (where the city sits) and sized to cover its ~430×690-unit footprint with
+// margin. normalBias keeps the flat facades free of shadow acne; radius softens the
+// PCF edge. Rendered once and frozen (see renderer.shadowMap.autoUpdate above).
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -560;
+sun.shadow.camera.right = 560;
+sun.shadow.camera.top = 560;
+sun.shadow.camera.bottom = -560;
+sun.shadow.camera.near = 20;
+sun.shadow.camera.far = 1200;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.6;
+sun.shadow.radius = 10;
 
 // Two big white softboxes well above the city, tilted down at it. A rect area
 // light gives a broad wrapped falloff across the facades that a directional
@@ -829,6 +853,18 @@ groundMaterial.onBeforeCompile = (shader) => {
         );
         normal = normalize(mix(normal, ripple, waterMask));
       }
+    `)
+    // Fade the ground's outer band to the sky (fog) colour so its hard edge dissolves
+    // into the background — the ground then reads as infinite, meeting the sky. vWaterUv
+    // runs 0..1 across the plane and the city sits in the central ~40%, so this only
+    // touches the empty rim, never the buildings.
+    .replace('#include <fog_fragment>', /* glsl */`
+      #include <fog_fragment>
+      #ifdef USE_FOG
+        vec2 groundEdge = min(vWaterUv, 1.0 - vWaterUv); // 0 at the rim, 0.5 at centre
+        float groundInfinite = smoothstep(0.0, 0.28, min(groundEdge.x, groundEdge.y));
+        gl_FragColor.rgb = mix(fogColor, gl_FragColor.rgb, groundInfinite);
+      #endif
     `);
 };
 
@@ -845,6 +881,7 @@ const ground = new THREE.Mesh(
 );
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.4;
+ground.receiveShadow = true;
 scene.add(ground);
 
 // ---------------------------------------------------------------------------
@@ -1655,6 +1692,8 @@ async function addBuildings(elements) {
 
   buildingMesh = new THREE.Mesh(merged, buildingMaterial);
   buildingMesh.visible = settings.buildingsVisible;
+  buildingMesh.castShadow = true;    // towers throw shadows across the streets…
+  buildingMesh.receiveShadow = true; // …and onto each other
   scene.add(buildingMesh);
   applyBuildingPalette();
   applyBuildingOpacity(settings.buildingOpacity);
@@ -2729,6 +2768,13 @@ async function init() {
   await nextFrame();
   await addBuildings(data.buildings);
 
+  // The city is in place and static, so bake the shadow map once, now — synchronously,
+  // while the buildings are visible. (Deferring to the animate loop would risk the
+  // reflection probe, which hides the buildings mid-frame, baking an empty map.)
+  // autoUpdate stays off, so it never re-renders after this.
+  renderer.shadowMap.needsUpdate = true;
+  renderer.render(scene, camera);
+
   // Real pickup demand, if it loads. Non-fatal on purpose — a throttled or dead
   // Socrata mirror just means the cabs spawn on the random walk, same as always.
   setLoadingState(85, 'Reading taxi demand…');
@@ -2773,6 +2819,7 @@ async function init() {
   });
 
   setLoadingState(100, 'Ready');
+  flyoverArmed = true; // the flyover easter egg can fire now the scene is up
   window.setTimeout(() => {
     hideLoadingIndicator();
     // Swing the control columns in as the loading overlay clears (see the
@@ -2782,6 +2829,73 @@ async function init() {
   console.info(`${nodes.length} nodes, ${edges.length} road segments, ${activeTaxis}/${taxis.length} taxis active`);
 }
 
+// ---------------------------------------------------------------------------
+// Flyover easter egg. Once per page load, when the camera is zoomed right out and
+// looking almost straight down, a plane crosses the screen with a sound cue: the
+// music starts, then ~4s later the plane passes bottom-to-top over 3s. The camera
+// is locked — no orbit, pan, zoom or scroll — until it's gone.
+// ---------------------------------------------------------------------------
+
+const FLYOVER_MIN_DISTANCE = 1050; // near maxDistance (1200): "all the way out"
+const FLYOVER_MAX_POLAR = 0.4;     // radians from straight down: "almost bird's-eye"
+
+let flyoverArmed = false; // set true once the map is ready, so it can't fire mid-load
+let flyoverDone = false;  // one-shot per page load
+
+function checkFlyover() {
+  if (!flyoverArmed || flyoverDone) return;
+  if (camera.position.distanceTo(controls.target) < FLYOVER_MIN_DISTANCE) return;
+  if (controls.getPolarAngle() > FLYOVER_MAX_POLAR) return;
+  flyoverDone = true;
+  startFlyover();
+}
+
+function startFlyover() {
+  // Lock the camera until the plane has passed.
+  controls.enabled = false;
+  controls.autoRotate = false;
+
+  // Music first; kick off loading the image now so it's ready to fly in 4s.
+  new Audio('assets/plane_sound.mp3').play().catch(() => {});
+  new Image().src = 'assets/plane.png';
+
+  // Cloud video layer, so the plane flies through an already-hazy sky. The footage
+  // is portrait, so the CSS turns it 90° and covers the viewport; it's muted (a
+  // requirement for autoplay) and loops.
+  const clouds = document.createElement('div');
+  clouds.id = 'flyover-clouds';
+  const video = document.createElement('video');
+  video.className = 'flyover-video';
+  video.src = 'assets/clouds.mp4';
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  clouds.append(video);
+  document.body.append(clouds);
+  video.play().catch(() => {});
+  // Force a reflow so the opacity:0 base is committed before the class flips it to 1
+  // — otherwise a freshly-inserted element jumps in with no transition.
+  void clouds.offsetWidth;
+  clouds.classList.add('is-visible');
+
+  window.setTimeout(() => {
+    const plane = document.createElement('img');
+    plane.id = 'plane-flyover';
+    plane.src = 'assets/plane.png';
+    plane.alt = '';
+    plane.addEventListener('animationend', () => {
+      plane.remove();
+      controls.enabled = true;
+      controls.autoRotate = view.autoOrbit; // restore whatever the panel had set
+      clouds.classList.remove('is-visible'); // fade the clouds back out
+      window.setTimeout(() => clouds.remove(), 1500);
+    });
+    document.body.append(plane);
+    // Next frame, so the parked base transform is in place before the run begins.
+    requestAnimationFrame(() => plane.classList.add('is-flying'));
+  }, 4000);
+}
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -2789,6 +2903,7 @@ function animate() {
 
   const dt = Math.min(clock.getDelta(), 0.05); // clamp: tab-switch stalls
   controls.update();
+  checkFlyover();
 
   waterUniforms.uWaterTime.value += dt;
 

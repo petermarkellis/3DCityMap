@@ -26,8 +26,8 @@ export default {
   // The background and ground hexes look absurdly bright in a colour picker, and
   // have to: they are sRGB, get decoded to linear, then ACES pulls them down
   // again. A "correct" navy like #0c1a3a lands on near-black on screen.
-  envColor: '#3a72d8', envIntensity: 1.8,
-  background: '#1e3d75', groundColor: '#24487f',
+  envColor: '#44587e', envIntensity: 1.8,
+  background: '#466090', groundColor: '#7b889d',
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
@@ -40,10 +40,10 @@ export default {
   buildingRoughness: 0.72, buildingMetalness: 0.15,
   buildingSpecular: 1.00, buildingDiffuse: 1.00,
   buildingSheen: 0.40, buildingGrain: 0.35, buildingVariation: 0.35,
-  buildingColor: '#383f4c', edgeColor: '#5676a5', showEdges: true,
+  buildingColor: '#4b515d', edgeColor: '#65748b', showEdges: true,
   // Cool blueprint clay: the facades catch the blue ambient at grazing angles.
   buildingSheenColor: '#26344f',
-  variationColorA: '#232935', variationColorB: '#4a5568', variationColorC: '#2e3a4d',
+  variationColorA: '#1c2331', variationColorB: '#4a5568', variationColorC: '#2e3a4d',
 
   // Camera — how the view moves (the right-hand Camera panel). Speeds and damping
   // are the Motion controls; autoOrbit is the Auto-orbit drift. Drag mode stays a
