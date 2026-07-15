@@ -94,8 +94,13 @@ const loadingLabel = document.querySelector('[data-loading-label]');
 const loadingBar = document.querySelector('[data-loading-bar]');
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#04050a');
-scene.fog = new THREE.FogExp2('#04050a', 0.0011);
+// Seed the sky/fog from the default theme rather than a hardcoded colour, so a fresh
+// load looks the same as it does after a theme switch. (They used to differ: only
+// switching a theme ran applySetting('background'), so on first load the scene kept
+// this near-black while every theme actually carries its own — ember's is a deep
+// blue.) One source of truth = no more "the sky goes blue only after I switch".
+scene.background = new THREE.Color(DEFAULT_THEME.background);
+scene.fog = new THREE.FogExp2(DEFAULT_THEME.background, 0.0011);
 
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 4000);
 camera.position.set(-130, 88, 175);
