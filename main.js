@@ -8,6 +8,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import { THEMES, THEME_LIST, DEFAULT_THEME, themeValues } from './themes/index.js';
 
@@ -275,6 +278,22 @@ const settings = {
   // until the user scrubs the slider, which switches to a frozen, manual time.
   timeOfDay: wallClockMinutes(),
   liveTime: true,
+  // Density heatmap — a live choropleth painted onto the buildings from where the
+  // cabs currently are. A view mode, not a look, so it's kept out of the themes
+  // (Restore-to-defaults won't touch it). `heatmapGain` is the sensitivity: how
+  // much traffic a cell needs before it reads as fully "hot".
+  heatmap: false,
+  heatmapGain: 1.0,
+  // Overlay data layers, also view modes kept out of the themes. Flows = pickup→dropoff
+  // arcs; events = 311 complaints. Both reveal by the hour on the time scrubber.
+  flows: false,
+  flowOpacity: 0.8,
+  flowWidth: 2.6,     // ribbon width in screen pixels
+  flowWindow: 1.1,    // ± hours of trips shown around the clock
+  events: false,
+  eventOpacity: 0.9,
+  eventSize: 110,     // point size in screen pixels
+  eventWindow: 1.6,   // ± hours of complaints shown around the clock
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -1190,6 +1209,7 @@ const SNAPSHOT_FILES = {
   osm: 'data/osm.json',
   water: 'data/water.json',
   demand: 'data/taxi-demand.json',
+  events: 'data/events-311.json',
 };
 
 async function loadSnapshot(path) {
@@ -1843,11 +1863,62 @@ async function addBuildings(elements) {
   // genuinely independent: the matte body and the reflective sheen move separately.
   buildingMaterial.onBeforeCompile = (shader) => {
     shader.uniforms.uDiffuse = { value: settings.buildingDiffuse };
+    // Density heatmap: a small live texture of where the cabs are (see updateHeatmap),
+    // sampled here by world position so each facade tints up a cool→hot ramp by the
+    // traffic around it. uHeatStrength eases 0→1 with the toggle so it fades in/out.
+    shader.uniforms.uHeatTex = { value: heatTexture };
+    shader.uniforms.uHeatStrength = { value: heatStrength };
+    shader.uniforms.uHeatScale = { value: settings.heatmapGain / HEAT_REF };
+    shader.uniforms.uHeatOrigin = { value: new THREE.Vector2(heatOriginX, heatOriginZ) };
+    shader.uniforms.uHeatInvSpan = {
+      value: new THREE.Vector2(1 / (heatCols * HEAT_CELL), 1 / (heatRows * HEAT_CELL)),
+    };
     buildingMaterial.userData.shader = shader;
+
+    // World XZ of each fragment, so the density lookup lands where the building
+    // actually sits on the map rather than in its local mesh space.
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vHeatWorld;')
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n\tvHeatWorld = (modelMatrix * vec4(transformed, 1.0)).xz;'
+      );
+
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uDiffuse;')
-      // material.diffuseColor is populated by this include and consumed by the
-      // diffuse BRDF below it; scaling it here never reaches specularColor.
+      .replace('#include <common>', /* glsl */`
+        #include <common>
+        uniform float uDiffuse;
+        uniform sampler2D uHeatTex;
+        uniform float uHeatStrength;
+        uniform float uHeatScale;
+        uniform vec2 uHeatOrigin;
+        uniform vec2 uHeatInvSpan;
+        varying vec2 vHeatWorld;
+        // Cool → hot ramp: deep blue (quiet) through teal and amber to red (busy).
+        vec3 heatRamp(float t) {
+          vec3 c0 = vec3(0.05, 0.13, 0.42);
+          vec3 c1 = vec3(0.05, 0.55, 0.55);
+          vec3 c2 = vec3(0.98, 0.72, 0.16);
+          vec3 c3 = vec3(0.98, 0.22, 0.12);
+          vec3 col = mix(c0, c1, smoothstep(0.0, 0.34, t));
+          col = mix(col, c2, smoothstep(0.34, 0.67, t));
+          col = mix(col, c3, smoothstep(0.67, 1.0, t));
+          return col;
+        }
+      `)
+      // material.diffuseColor is populated by color_fragment (vertexColour × material
+      // colour). Recolour it toward the ramp *before* lighting, so the choropleth is
+      // lit and shaded like the rest of the city instead of a flat sticker. Weighting
+      // by t keeps quiet blocks on their own palette and only lights up real traffic.
+      .replace('#include <color_fragment>', /* glsl */`
+        #include <color_fragment>
+        if (uHeatStrength > 0.001) {
+          float dens = texture2D(uHeatTex, (vHeatWorld - uHeatOrigin) * uHeatInvSpan).r;
+          float t = clamp(dens * uHeatScale, 0.0, 1.0);
+          float w = smoothstep(0.0, 1.0, t) * uHeatStrength;
+          diffuseColor.rgb = mix(diffuseColor.rgb, heatRamp(t), w);
+        }
+      `)
       .replace(
         '#include <lights_physical_fragment>',
         '#include <lights_physical_fragment>\n\tmaterial.diffuseColor *= uDiffuse;'
@@ -2524,6 +2595,13 @@ async function loadTaxiDemand() {
   return response.json();
 }
 
+// 311 complaints for the events overlay. Bundled-only for now — there's no live
+// fallback because, unlike demand, nothing depends on it if it's missing (the layer
+// just stays empty). Returns the raw rows or null.
+async function loadEvents() {
+  return loadSnapshot(SNAPSHOT_FILES.events);
+}
+
 // Snap every pickup to a node and index it by hour. The per-hour arrays hold one
 // entry per pickup, node indices repeated by frequency — so sampling one at random
 // is already weighted by real demand, no separate weight table needed.
@@ -2845,6 +2923,401 @@ function decayHeat(dt) {
 }
 
 // ---------------------------------------------------------------------------
+// Taxi density heatmap — a live choropleth painted onto the buildings.
+//
+// Every active cab is splatted into a coarse grid over the map each tick, with a
+// short decay so the field tracks where traffic *is right now*. That grid is a
+// small float texture the building shader samples by world position (see the
+// building onBeforeCompile): each facade tints from its own colour up a cool→hot
+// ramp by the density around it. So it adapts continuously as cabs move, and
+// shifts the moment the hour scrubber re-seeds the fleet from a different hour's
+// demand. It rides on the buildings — hide them and there's nothing to paint —
+// and toggling it off eases the ramp back to the normal palette.
+// ---------------------------------------------------------------------------
+
+const HEAT_CELL = 12;        // world units per cell (~120 m) — reads as an area, not a single street
+const HEAT_REF = 3.0;        // cabs-per-cell that maps to the hottest colour (scaled by heatmapGain)
+const HEAT_INTERVAL = 0.1;   // seconds between grid updates — 10 Hz is plenty for a soft field
+const HEAT_HALFLIFE = 1.6;   // seconds for a cell to forget a cab that has moved on
+
+const heatCols = Math.max(8, Math.round(groundSpanX / HEAT_CELL));
+const heatRows = Math.max(8, Math.round(groundSpanZ / HEAT_CELL));
+const heatOriginX = -groundSpanX / 2;
+const heatOriginZ = -groundSpanZ / 2;
+const heatDensity = new Float32Array(heatCols * heatRows);
+const heatTexture = new THREE.DataTexture(
+  heatDensity, heatCols, heatRows, THREE.RedFormat, THREE.FloatType,
+);
+heatTexture.minFilter = THREE.LinearFilter;
+heatTexture.magFilter = THREE.LinearFilter;
+heatTexture.wrapS = THREE.ClampToEdgeWrapping;
+heatTexture.wrapT = THREE.ClampToEdgeWrapping;
+heatTexture.needsUpdate = true;
+
+let heatClock = 0;
+let heatStrength = 0;        // eased 0..1, follows settings.heatmap so the toggle fades in/out
+
+// Splat one cab into the grid with bilinear spread, so the field doesn't shimmer
+// as cabs cross cell boundaries.
+function heatSplat(x, z, amount) {
+  const fx = (x - heatOriginX) / HEAT_CELL - 0.5;
+  const fz = (z - heatOriginZ) / HEAT_CELL - 0.5;
+  const i0 = Math.floor(fx);
+  const j0 = Math.floor(fz);
+  const tx = fx - i0;
+  const tz = fz - j0;
+  for (let dj = 0; dj <= 1; dj += 1) {
+    const j = j0 + dj;
+    if (j < 0 || j >= heatRows) continue;
+    const wj = (dj ? tz : 1 - tz) * amount;
+    for (let di = 0; di <= 1; di += 1) {
+      const i = i0 + di;
+      if (i < 0 || i >= heatCols) continue;
+      heatDensity[j * heatCols + i] += (di ? tx : 1 - tx) * wj;
+    }
+  }
+}
+
+function updateHeatmap(dt) {
+  // Ease the toggle so the choropleth fades rather than snaps, and keep the shader
+  // uniforms in step with the sensitivity slider.
+  const target = settings.heatmap ? 1 : 0;
+  heatStrength += (target - heatStrength) * Math.min(1, dt * 6);
+  const shader = buildingMaterial && buildingMaterial.userData.shader;
+  if (shader && shader.uniforms.uHeatStrength) {
+    shader.uniforms.uHeatStrength.value = heatStrength;
+    shader.uniforms.uHeatScale.value = settings.heatmapGain / HEAT_REF;
+  }
+
+  // Fully off and idle: don't spend anything binning cabs into a field no one sees.
+  if (!settings.heatmap && heatStrength < 0.001) return;
+
+  heatClock += dt;
+  if (heatClock < HEAT_INTERVAL) return;
+  const step = heatClock;
+  heatClock = 0;
+
+  const decay = Math.pow(0.5, step / HEAT_HALFLIFE);
+  for (let i = 0; i < heatDensity.length; i += 1) heatDensity[i] *= decay;
+
+  // Adding (1 - decay) per tick makes a cell a cab never leaves settle at ~1, so the
+  // stored value reads as "cabs currently dwelling here" and HEAT_REF is in cab units.
+  const add = 1 - decay;
+  for (let t = 0; t < activeTaxis; t += 1) {
+    const taxi = taxis[t];
+    const edge = edges[taxi.edge];
+    if (!edge) continue;
+    const a = nodes[edge.a];
+    const b = nodes[edge.b];
+    const toB = taxi.node === edge.b ? taxi.progress : 1 - taxi.progress;
+    heatSplat(a.x + (b.x - a.x) * toB, a.z + (b.z - a.z) * toB, add);
+  }
+  heatTexture.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------------------
+// Overlay layers — flows and events. Both are geolocated + timestamped, so both
+// hang off one fractional "current hour" uniform (settings.timeOfDay / 60): the
+// time scrubber sweeps them, and only the traffic/complaints near that hour show.
+//
+//   Flows  — every trip drawn as a pickup→dropoff arc arcing over the city, with
+//            a travelling glow from origin to destination.
+//   Events — 311 complaints as glowing points, coloured by category, that surface
+//            at the hour they were logged.
+//
+// The whole dataset lives in one static geometry each; the hour filter is done in
+// the shader (an alpha window on circular hour-distance), so scrubbing time costs
+// nothing but a uniform write — no geometry rebuilds.
+// ---------------------------------------------------------------------------
+
+let overlayTime = 0;
+
+// --- Flows: pickup → dropoff arcs -----------------------------------------
+let flowsMesh = null;
+let flowsMat = null;
+// --- Flow-arc build-time knobs (a rebuild — reload — picks up changes) ------
+const FLOW_MAX = 6000;         // arcs kept (sampled evenly across the day) — plenty, stays light
+const FLOW_SEGMENTS = 20;      // straight pieces per arc; enough to read as a smooth curve
+const FLOW_ARCH_BASE = 10;     // apex height (world units) for the shortest kept trip…
+const FLOW_ARCH_RATE = 0.9;    // …plus this much per unit of trip length…
+const FLOW_ARCH_MAX = 70;      // …capped here, so cross-town runs don't shoot into orbit
+
+function buildFlows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+
+  // Keep trips whose dropoff lands on the visible map (drop the JFK/uptown runs that
+  // would shoot off to infinity), then sample down to FLOW_MAX evenly across the list
+  // — which, because the file is ordered by hour, keeps every hour represented.
+  const extentX = groundSpanX * 0.92;
+  const extentZ = groundSpanZ * 0.92;
+  const trips = [];
+  for (const r of rows) {
+    const dLon = parseFloat(r.dropoff_longitude);
+    const dLat = parseFloat(r.dropoff_latitude);
+    if (!Number.isFinite(dLon) || !Number.isFinite(dLat)) continue;
+    const hour = parseInt((r.pickup_datetime || '').slice(11, 13), 10);
+    if (!(hour >= 0 && hour < 24)) continue;
+    const p = toLocal(parseFloat(r.pickup_longitude), parseFloat(r.pickup_latitude));
+    const d = toLocal(dLon, dLat);
+    if (Math.abs(d.x) > extentX || Math.abs(d.z) > extentZ) continue;
+    const dist = Math.hypot(d.x - p.x, d.z - p.z);
+    if (dist < 3) continue; // ignore round-the-corner hops — no arc worth drawing
+    trips.push({ p, d, dist, hour });
+  }
+  if (trips.length === 0) return;
+
+  let picked = trips;
+  if (trips.length > FLOW_MAX) {
+    picked = [];
+    const stride = trips.length / FLOW_MAX;
+    for (let i = 0; i < FLOW_MAX; i += 1) picked.push(trips[Math.floor(i * stride)]);
+  }
+
+  // Fat lines (LineSegments2) are instanced: one quad per straight segment, expanded to
+  // a ribbon of `linewidth` pixels in the vertex shader. So the geometry is a flat list
+  // of segment endpoint pairs (setPositions), plus one value per segment for the hour,
+  // a per-arc random seed, and the arc-parameter at each end (for the travelling pulse).
+  const segCount = picked.length * FLOW_SEGMENTS;
+  const positions = new Float32Array(segCount * 6); // start xyz, end xyz per segment
+  const aHour = new Float32Array(segCount);
+  const aSeed = new Float32Array(segCount);
+  const aT0 = new Float32Array(segCount);
+  const aT1 = new Float32Array(segCount);
+  let seg = 0;
+
+  for (const t of picked) {
+    const seed = Math.random();
+    const mx = (t.p.x + t.d.x) / 2;
+    const mz = (t.p.z + t.d.z) / 2;
+    // Control-point height ∝ trip length, so cross-town runs arch higher than hops.
+    const ctrlY = 0.3 + Math.min(FLOW_ARCH_MAX, FLOW_ARCH_BASE + t.dist * FLOW_ARCH_RATE);
+    const px = new Array(FLOW_SEGMENTS + 1);
+    const py = new Array(FLOW_SEGMENTS + 1);
+    const pz = new Array(FLOW_SEGMENTS + 1);
+    for (let s = 0; s <= FLOW_SEGMENTS; s += 1) {
+      const u = s / FLOW_SEGMENTS;
+      const omu = 1 - u;
+      // Quadratic Bézier; only the middle term carries the lift, so both ends sit on
+      // the ground and the arc bows up between them.
+      px[s] = omu * omu * t.p.x + 2 * omu * u * mx + u * u * t.d.x;
+      py[s] = omu * omu * 0.3 + 2 * omu * u * ctrlY + u * u * 0.3;
+      pz[s] = omu * omu * t.p.z + 2 * omu * u * mz + u * u * t.d.z;
+    }
+    for (let s = 0; s < FLOW_SEGMENTS; s += 1) {
+      const o = seg * 6;
+      positions[o] = px[s]; positions[o + 1] = py[s]; positions[o + 2] = pz[s];
+      positions[o + 3] = px[s + 1]; positions[o + 4] = py[s + 1]; positions[o + 5] = pz[s + 1];
+      aHour[seg] = t.hour;
+      aSeed[seg] = seed;
+      aT0[seg] = s / FLOW_SEGMENTS;
+      aT1[seg] = (s + 1) / FLOW_SEGMENTS;
+      seg += 1;
+    }
+  }
+
+  const geo = new LineSegmentsGeometry();
+  geo.setPositions(positions);
+  geo.setAttribute('aHour', new THREE.InstancedBufferAttribute(aHour, 1));
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(aSeed, 1));
+  geo.setAttribute('aT0', new THREE.InstancedBufferAttribute(aT0, 1));
+  geo.setAttribute('aT1', new THREE.InstancedBufferAttribute(aT1, 1));
+
+  // Screen-space width (constant pixels regardless of zoom) keeps the ribbons legible.
+  flowsMat = new LineMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    worldUnits: false,
+    linewidth: settings.flowWidth,
+  });
+  flowsMat.resolution.set(window.innerWidth, window.innerHeight);
+
+  // Custom uniforms — LineMaterial is a ShaderMaterial, so add ours to its uniform set
+  // and patch its shader strings. Named uFlowOpacity to avoid clashing with the
+  // material's own `opacity`.
+  Object.assign(flowsMat.uniforms, {
+    uHour: { value: 12 },
+    uWindow: { value: settings.flowWindow },
+    uTime: { value: 0 },
+    uFlowOpacity: { value: settings.flowOpacity },
+    uColorA: { value: new THREE.Color('#38d6ff') }, // origin — cool
+    uColorB: { value: new THREE.Color('#ff8a3d') }, // destination — warm
+  });
+
+  // `position.y < 0.5` is how LineMaterial's quad picks the start vs end endpoint —
+  // reuse it to hand the right arc-parameter to each end.
+  flowsMat.vertexShader = flowsMat.vertexShader.replace('void main() {', /* glsl */`
+    attribute float aHour;
+    attribute float aSeed;
+    attribute float aT0;
+    attribute float aT1;
+    varying float vHour;
+    varying float vSeed;
+    varying float vArc;
+    void main() {
+      vHour = aHour;
+      vSeed = aSeed;
+      vArc = ( position.y < 0.5 ) ? aT0 : aT1;
+  `);
+
+  flowsMat.fragmentShader = flowsMat.fragmentShader
+    .replace('void main() {', /* glsl */`
+      uniform float uHour;
+      uniform float uWindow;
+      uniform float uTime;
+      uniform float uFlowOpacity;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      varying float vHour;
+      varying float vSeed;
+      varying float vArc;
+      void main() {
+    `)
+    // Override LineMaterial's flat colour with the hour window + gradient + a bright
+    // head travelling origin→destination, keeping its anti-aliased coverage `alpha`.
+    .replace('vec4 diffuseColor = vec4( diffuse, alpha );', /* glsl */`
+      float _hd = abs( vHour - uHour );
+      _hd = min( _hd, 24.0 - _hd );          // clock wraps at midnight
+      float _vis = smoothstep( uWindow, 0.0, _hd );
+      if ( _vis <= 0.001 ) discard;
+      float _head = fract( uTime * 0.22 + vSeed );
+      float _pulse = smoothstep( 0.14, 0.0, abs( vArc - _head ) );
+      vec3 _col = mix( uColorA, uColorB, vArc ) * ( 0.35 + _pulse * 1.7 );
+      alpha *= _vis * uFlowOpacity * ( 0.45 + _pulse );
+      vec4 diffuseColor = vec4( _col, alpha );
+    `);
+  flowsMat.needsUpdate = true;
+
+  flowsMesh = new LineSegments2(geo, flowsMat);
+  flowsMesh.visible = settings.flows;
+  flowsMesh.frustumCulled = false; // arcs span the whole map; never cull the batch
+  flowsMesh.renderOrder = 3;
+  scene.add(flowsMesh);
+}
+
+// --- Events: 311 complaints as points -------------------------------------
+let eventsMesh = null;
+let eventsMat = null;
+
+// Fold ~200 raw complaint types into a handful of readable, fixed-colour categories.
+// Order matters: first match wins, so the specific tests come before the catch-all.
+const EVENT_CATEGORIES = [
+  { name: 'Noise', color: '#ff3d81', test: (t) => /noise/i.test(t) },
+  { name: 'Vehicle', color: '#ffb020', test: (t) => /parking|vehicle|traffic|blocked|obstruction/i.test(t) },
+  { name: 'Street life', color: '#2ad0d0', test: (t) => /encampment|homeless|panhandl|vendor/i.test(t) },
+  { name: 'Buildings', color: '#7bd63a', test: (t) => /construction|plumbing|heat|water|sanitation|dirty|graffiti|condition/i.test(t) },
+  { name: 'Other', color: '#c9c9d6', test: () => true },
+];
+const eventCategory = (type) => {
+  const t = type || '';
+  for (let i = 0; i < EVENT_CATEGORIES.length; i += 1) if (EVENT_CATEGORIES[i].test(t)) return i;
+  return EVENT_CATEGORIES.length - 1;
+};
+
+function buildEvents(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+
+  const pos = [];
+  const aHour = [];
+  const aCat = [];
+  const aSeed = [];
+  for (const r of rows) {
+    const lon = parseFloat(r.longitude);
+    const lat = parseFloat(r.latitude);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const hour = parseInt((r.created_date || '').slice(11, 13), 10);
+    if (!(hour >= 0 && hour < 24)) continue;
+    const l = toLocal(lon, lat);
+    pos.push(l.x, 2.0, l.z); // lifted just off the street so the glow clears the roads
+    aHour.push(hour);
+    aCat.push(eventCategory(r.complaint_type));
+    aSeed.push(Math.random());
+  }
+  if (pos.length === 0) return;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aHour', new THREE.Float32BufferAttribute(aHour, 1));
+  geo.setAttribute('aCat', new THREE.Float32BufferAttribute(aCat, 1));
+  geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(aSeed, 1));
+
+  const cat = EVENT_CATEGORIES.map((c) => new THREE.Color(c.color));
+  eventsMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uHour: { value: 12 },
+      uWindow: { value: 1.6 },   // complaints are sparse, so a wider window keeps company
+      uTime: { value: 0 },
+      uSize: { value: 110 },
+      uOpacity: { value: settings.eventOpacity },
+      uCat0: { value: cat[0] }, uCat1: { value: cat[1] }, uCat2: { value: cat[2] },
+      uCat3: { value: cat[3] }, uCat4: { value: cat[4] },
+    },
+    vertexShader: /* glsl */`
+      attribute float aHour;
+      attribute float aCat;
+      attribute float aSeed;
+      uniform float uHour, uWindow, uTime, uSize;
+      varying float vCat;
+      varying float vVis;
+      void main() {
+        vCat = aCat;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float d = abs(aHour - uHour);
+        d = min(d, 24.0 - d);
+        vVis = smoothstep(uWindow, 0.0, d);
+        float breathe = 0.85 + 0.15 * sin(uTime * 2.2 + aSeed * 6.2831);
+        gl_PointSize = uSize * (0.35 + 1.15 * vVis) * breathe * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision mediump float;
+      uniform float uOpacity;
+      uniform vec3 uCat0, uCat1, uCat2, uCat3, uCat4;
+      varying float vCat;
+      varying float vVis;
+      void main() {
+        if (vVis <= 0.001) discard;
+        float dd = length(gl_PointCoord - 0.5);
+        if (dd > 0.5) discard;
+        float core = smoothstep(0.5, 0.0, dd);   // soft disc with a bright centre
+        vec3 c = vCat < 0.5 ? uCat0 : vCat < 1.5 ? uCat1 : vCat < 2.5 ? uCat2 : vCat < 3.5 ? uCat3 : uCat4;
+        gl_FragColor = vec4(c * (0.35 + core * 1.7), core * vVis * uOpacity);
+      }
+    `,
+  });
+
+  eventsMesh = new THREE.Points(geo, eventsMat);
+  eventsMesh.visible = settings.events;
+  eventsMesh.frustumCulled = false;
+  eventsMesh.renderOrder = 4;
+  scene.add(eventsMesh);
+}
+
+// Drive both overlays from the clock each frame: same fractional hour, shared anim time.
+function updateOverlays(dt) {
+  overlayTime += dt;
+  const hour = settings.timeOfDay / 60;
+  if (flowsMesh && flowsMesh.visible) {
+    flowsMat.uniforms.uHour.value = hour;
+    flowsMat.uniforms.uTime.value = overlayTime;
+    flowsMat.uniforms.uWindow.value = settings.flowWindow;
+    flowsMat.uniforms.uFlowOpacity.value = settings.flowOpacity;
+    flowsMat.linewidth = settings.flowWidth;
+  }
+  if (eventsMesh && eventsMesh.visible) {
+    eventsMat.uniforms.uHour.value = hour;
+    eventsMat.uniforms.uTime.value = overlayTime;
+    eventsMat.uniforms.uWindow.value = settings.eventWindow;
+    eventsMat.uniforms.uSize.value = settings.eventSize;
+    eventsMat.uniforms.uOpacity.value = settings.eventOpacity;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fallback city — Overpass is rate limited and does go down. Rather than a
 // blank screen, generate a grid that exercises the same code paths.
 // ---------------------------------------------------------------------------
@@ -2953,14 +3426,30 @@ async function init() {
   // Socrata mirror just means the cabs spawn on the random walk, same as always.
   setLoadingState(85, 'Reading taxi demand…');
   await nextFrame();
+  let demandRows = null;
   try {
-    demandModel = buildDemandModel(await loadTaxiDemand());
+    demandRows = await loadTaxiDemand();
+    demandModel = buildDemandModel(demandRows);
     if (demandModel) {
       console.info(`Taxi demand: seeded from ${demandModel.all.length} real pickups.`);
     }
   } catch (error) {
     console.warn('No live taxi demand; cabs spawn on the random walk:', error);
     demandModel = null;
+  }
+
+  // Overlay layers, both non-fatal — a failure here just leaves that toggle empty.
+  setLoadingState(88, 'Charting flows & reports…');
+  await nextFrame();
+  try {
+    if (demandRows) buildFlows(demandRows); // pickup→dropoff arcs share the demand file
+  } catch (error) {
+    console.warn('Flows overlay unavailable:', error);
+  }
+  try {
+    buildEvents(await loadEvents());
+  } catch (error) {
+    console.warn('Events overlay unavailable:', error);
   }
 
   setLoadingState(90, 'Dispatching taxis…');
@@ -3089,6 +3578,8 @@ function animate() {
     updateTaxis(dt);
     decayHeat(dt);
   }
+  updateHeatmap(dt);
+  updateOverlays(dt);
 
   updateReflectionProbe(dt);
   composer.render();
@@ -3264,6 +3755,8 @@ window.addEventListener('resize', () => {
   applyBloomResolution(); // composer.setSize reset bloom to full res; halve it again
   // The road ribbons are ordinary world-space geometry, so a resize costs them
   // nothing — the camera projection alone takes care of them.
+  // Fat flow-lines size themselves in pixels, so they need the new drawing-buffer size.
+  if (flowsMat) flowsMat.resolution.set(window.innerWidth, window.innerHeight);
 });
 
 // ---------------------------------------------------------------------------
@@ -3313,6 +3806,13 @@ function applySetting(key, value) {
         applyTimeOfDay();
       }
       break;
+    case 'flows':
+      if (flowsMesh) flowsMesh.visible = value;
+      break;
+    case 'events':
+      if (eventsMesh) eventsMesh.visible = value;
+      break;
+    // flowOpacity / eventOpacity are read straight off settings by updateOverlays.
     case 'envColor':
       applyEnvironment(value);
       break;
@@ -3564,13 +4064,22 @@ function wirePanel(panel, state, apply) {
   // Per-section accordions. The open/closed state is markup-driven (a
   // data-collapsed attribute in the HTML sets the defaults), so this only has to
   // keep the attribute, the chevron and aria-expanded in step.
-  for (const button of panel.querySelectorAll('.section-toggle')) {
-    button.addEventListener('click', () => {
-      const section = button.closest('section');
+  // Collapse can be driven from the section title or the chevron. In plain sections the
+  // chevron sits inside the title button; in sections with an info button it's pulled out
+  // into its own .section-collapse button so it can sit to the right of the "i". Either
+  // way the chevron lives somewhere in the header, so find it on the section.
+  for (const section of panel.querySelectorAll('section')) {
+    const toggle = section.querySelector('.section-toggle');
+    if (!toggle) continue;
+    const chev = section.querySelector('.chev');
+    const collapse = () => {
       const collapsed = section.toggleAttribute('data-collapsed');
-      button.setAttribute('aria-expanded', String(!collapsed));
-      button.querySelector('.chev').textContent = collapsed ? '+' : '−';
-    });
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      if (chev) chev.textContent = collapsed ? '+' : '−';
+    };
+    toggle.addEventListener('click', collapse);
+    const collapseButton = section.querySelector('.section-collapse');
+    if (collapseButton) collapseButton.addEventListener('click', collapse);
   }
 
   return { syncInputs: () => inputs.forEach(syncInput) };
@@ -3796,9 +4305,86 @@ function setupCamera() {
   syncInputs();
 }
 
+// Per-section help text, keyed by the info button's data-info. Kept as small HTML so
+// each explanation can have a couple of short paragraphs; <strong> for the key terms.
+const SECTION_INFO = {
+  flows: {
+    title: 'Trip flows',
+    body: `
+      <p>Each arc is one real taxi trip, drawn from where it was <strong>picked up</strong>
+      to where it was <strong>dropped off</strong>. A glow travels along the arc from
+      origin to destination — cool blue where the ride began, warm orange where it ended
+      — so you can read which way the city is moving.</p>
+      <p>Only trips from around the current hour are shown, so dragging the
+      <strong>Time of day</strong> slider sweeps through the day: watch the morning rush
+      into Midtown reverse into an evening spread back out. The data is real 2015
+      yellow-cab records from NYC Open Data.</p>
+      <p class="info-controls"><strong>Width</strong> — how thick each ribbon is drawn.
+      <strong>Hour spread</strong> — how many hours of trips share the screen at once: low
+      is a crisp single-hour snapshot, high blends neighbouring hours into a fuller,
+      calmer picture. <strong>Opacity</strong> — fades the whole layer up or down.</p>`,
+  },
+  events: {
+    title: '311 reports',
+    body: `
+      <p>Every point is a real <strong>311 complaint</strong> — the city's non-emergency
+      service line — logged on a representative day, placed where it was reported.</p>
+      <p>Colour is the category: <strong>pink</strong> noise, <strong>amber</strong>
+      vehicle &amp; parking, <strong>cyan</strong> street life, <strong>green</strong>
+      buildings &amp; sanitation. Each point surfaces at the <strong>hour it was
+      filed</strong>, so the Time-of-day slider replays the city's day: quiet before
+      dawn, noise complaints climbing into the night.</p>
+      <p class="info-controls"><strong>Size</strong> — how big each point glows.
+      <strong>Hour spread</strong> — how many hours of complaints show at once: low
+      pinpoints a single hour, high keeps more on screen. <strong>Opacity</strong> —
+      fades the whole layer up or down.</p>`,
+  },
+  heatmap: {
+    title: 'Density heatmap',
+    body: `
+      <p>The buildings are re-coloured by how many taxis are moving nearby, right now —
+      a live <strong>choropleth</strong> painted onto the city. Quiet blocks keep their
+      normal colour; busy areas climb a <strong>cool → hot</strong> ramp (blue → teal →
+      amber → red).</p>
+      <p>It updates continuously as the cabs drive, and shifts when you scrub the
+      <strong>Time of day</strong> slider, because the fleet re-seeds from that hour's
+      real demand. Needs the buildings shown.</p>
+      <p class="info-controls"><strong>Sensitivity</strong> — how much traffic a block
+      needs before it reads as fully hot: raise it to make the map cooler and pick out
+      only the busiest streets, lower it to light the city up sooner.</p>`,
+  },
+};
+
+// Wire the little "i" buttons on section headers to a shared centred dialog.
+function setupSectionInfo() {
+  const dialog = document.querySelector('#info-dialog');
+  if (!dialog) return;
+  const titleEl = dialog.querySelector('#info-dialog-title');
+  const textEl = dialog.querySelector('#info-dialog-text');
+
+  for (const button of document.querySelectorAll('.section-info[data-info]')) {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation(); // don't also collapse the section
+      const info = SECTION_INFO[button.dataset.info];
+      if (!info) return;
+      titleEl.textContent = info.title;
+      textEl.innerHTML = info.body;
+      dialog.showModal();
+    });
+  }
+
+  // Close on the button, on a backdrop click, or on Escape (the last is native to
+  // <dialog>). The backdrop is the dialog element itself outside its content box.
+  dialog.querySelector('.dialog-close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+}
+
 setupPlaceLabel();
 setupStats();
 setupControls();
+setupSectionInfo();
 setupCamera();
 // The panels start hidden and the loader covers the screen until Continue. If init
 // throws unexpectedly, reveal the scene anyway so the user is never trapped behind

@@ -37,6 +37,14 @@ const DEMAND_HOUR_MIN = 150;       // floor per hour, so quiet hours still seed 
 const DEMAND_HOUR_MAX = 1600;      // ceiling per hour, keeps each query fast + file lean
 const SOCRATA_RESOURCE = 'https://data.cityofnewyork.us/resource/2yzn-sicd.json';
 
+// 311 service requests — the "events" layer. Low volume in this bbox (~600/day), so one
+// query for a representative recent weekday grabs the whole day with no truncation and
+// therefore no sampling bias. Each row carries its own timestamp, so the app can reveal
+// them by the hour on the time scrubber.
+const EVENTS_DAY = '2024-06-12';   // a normal recent Wednesday
+const EVENTS_LIMIT = 8000;         // a full bbox-day is ~600 rows; this never truncates
+const EVENTS_RESOURCE = 'https://data.cityofnewyork.us/resource/erm2-nwe9.json';
+
 const OVERPASS_MIRRORS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -113,7 +121,10 @@ async function socrata(url, appToken) {
 async function fetchTaxiDemand(appToken) {
   const bboxWhere = `pickup_latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
     + ` and pickup_longitude between ${BBOX.minLon} and ${BBOX.maxLon}`;
-  const select = 'pickup_longitude,pickup_latitude,pickup_datetime';
+  // dropoff_* rides along so the same file feeds both demand seeding (pickup) and the
+  // origin→destination flow arcs (pickup→dropoff). Dropoffs can land off-map; the arc
+  // layer filters those out.
+  const select = 'pickup_longitude,pickup_latitude,pickup_datetime,dropoff_longitude,dropoff_latitude';
 
   // 1. Hourly curve for the representative day (a group-by aggregation is indexed/fast,
   //    unlike a date_extract filter). Gives count per hour → the shape of demand.
@@ -149,6 +160,21 @@ async function fetchTaxiDemand(appToken) {
   return rows;
 }
 
+// 311 complaints for one representative day, bbox-filtered. Returns raw rows
+// {longitude, latitude, created_date, complaint_type}; the app buckets complaint_type
+// into a handful of colour categories and reveals each point at its hour.
+async function fetch311(appToken) {
+  const where = `latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
+    + ` and longitude between ${BBOX.minLon} and ${BBOX.maxLon}`
+    + ` and created_date between '${EVENTS_DAY}T00:00:00' and '${EVENTS_DAY}T23:59:59'`;
+  const url = `${EVENTS_RESOURCE}?$select=${encodeURIComponent('longitude,latitude,created_date,complaint_type')}`
+    + `&$where=${encodeURIComponent(where)}`
+    + `&$order=${encodeURIComponent('created_date')}&$limit=${EVENTS_LIMIT}`;
+  const rows = await socrata(url, appToken);
+  // Some 311 rows geocode only to a zip — no point without a coordinate.
+  return rows.filter((r) => r.longitude && r.latitude);
+}
+
 async function save(name, data) {
   const path = `data/${name}`;
   await writeFile(path, JSON.stringify(data));
@@ -178,6 +204,11 @@ async function main() {
   if (!appToken) console.warn('  no app token (env SOCRATA_APP_TOKEN or config.local.js) — may be throttled');
   const demand = await fetchTaxiDemand(appToken);
   await save('taxi-demand.json', demand);
+
+  console.log(`Fetching 311 events (Socrata, ${EVENTS_DAY})…`);
+  const events = await fetch311(appToken);
+  console.log(`  ${events.length} located complaints`);
+  await save('events-311.json', events);
 
   console.log('\nDone. Commit data/*.json (or host them) and the app will prefer them.');
 }

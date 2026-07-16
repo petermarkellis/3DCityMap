@@ -6,7 +6,7 @@
 export default {
   // Theme — identity, plus the accent the whole control panel is tinted with.
   id: 'ember',
-  label: 'Orange burn',
+  label: 'Clay',
   swatch: '#ff4d0a',
   accent: '#ff8c2a',
 

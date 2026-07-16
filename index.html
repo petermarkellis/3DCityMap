@@ -549,6 +549,8 @@
 
       .panel h2 {
         margin: 0;
+        display: flex;
+        align-items: stretch;
         font-size: 10px;
         font-weight: 600;
         letter-spacing: 0.11em;
@@ -572,7 +574,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         padding: 0 0 6px;
         border: 0;
         border-bottom: 1px solid var(--edge-soft);
@@ -588,10 +591,60 @@
         color: var(--text);
       }
 
-      .panel .section-toggle .chev {
+      .panel .chev {
         color: var(--accent);
         font-size: 13px;
         line-height: 1;
+      }
+
+      /* Chevron pulled out of the title button so it can sit to the right of the info
+         button. Same bottom border + padding as its siblings so the underline is
+         continuous. */
+      .panel .section-collapse {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        margin-left: 8px;
+        padding: 0 0 6px;
+        border: 0;
+        border-bottom: 1px solid var(--edge-soft);
+        background: none;
+        cursor: pointer;
+      }
+
+      /* Optional "what is this?" affordance, sibling to the toggle so it never nests a
+         button in a button. Shares the toggle's bottom border so the header underline
+         stays continuous. */
+      .panel .section-info {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        margin-left: 8px;
+        padding: 0 0 6px;
+        border: 0;
+        border-bottom: 1px solid var(--edge-soft);
+        background: none;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .panel .section-info:hover {
+        color: var(--accent);
+      }
+
+      .section-info-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-size: 9px;
+        font-weight: 700;
+        font-style: italic;
+        line-height: 1;
+        font-family: Georgia, "Times New Roman", serif;
       }
 
       /* Everything in the section except its heading. Avoids wrapping each
@@ -832,6 +885,69 @@
       .theme-dialog::backdrop {
         background: rgba(0, 0, 0, 0.5);
         backdrop-filter: blur(2px);
+      }
+
+      /* Per-section "what does this do?" dialog. Same frosted, semi-transparent panel
+         look as the control menu, centred by the native <dialog> element. */
+      .info-dialog {
+        width: min(380px, 92vw);
+        padding: 0;
+        border: 1px solid var(--edge-soft);
+        border-radius: 14px;
+        background: rgba(9, 10, 12, 0.74);
+        backdrop-filter: blur(14px);
+        color: var(--text);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      }
+
+      .info-dialog::backdrop {
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(2px);
+      }
+
+      .info-dialog-body {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px;
+      }
+
+      .info-dialog h3 {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .info-dialog-text {
+        font-size: 12.5px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .info-dialog-text p {
+        margin: 0 0 9px;
+      }
+
+      .info-dialog-text p:last-child {
+        margin-bottom: 0;
+      }
+
+      .info-dialog-text strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* The slider reference, set off from the description with a hairline rule. */
+      .info-dialog-text .info-controls {
+        margin-top: 4px;
+        padding-top: 12px;
+        border-top: 1px solid var(--edge-soft);
+        font-size: 12px;
       }
 
       .theme-dialog form {
@@ -1133,6 +1249,91 @@
         <section data-collapsed>
           <h2>
             <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Density heatmap</span>
+            </button>
+            <button type="button" class="section-info" data-info="heatmap" aria-label="About the density heatmap">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="heatmap" />
+            <span>Colour buildings by taxi density</span>
+          </label>
+          <label>
+            <span>Sensitivity<em data-value="heatmapGain"></em></span>
+            <input type="range" data-setting="heatmapGain" min="0.2" max="4" step="0.05" value="1" />
+          </label>
+          <p class="hint">Needs buildings shown. Adapts live and follows the time-of-day slider.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Trip flows</span>
+            </button>
+            <button type="button" class="section-info" data-info="flows" aria-label="About trip flows">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="flows" />
+            <span>Show pickup → dropoff arcs</span>
+          </label>
+          <label>
+            <span>Width<em data-value="flowWidth"></em></span>
+            <input type="range" data-setting="flowWidth" min="1" max="8" step="0.1" value="2.6" />
+          </label>
+          <label>
+            <span>Hour spread<em data-value="flowWindow"></em></span>
+            <input type="range" data-setting="flowWindow" min="0.4" max="4" step="0.1" value="1.1" />
+          </label>
+          <label>
+            <span>Opacity<em data-value="flowOpacity"></em></span>
+            <input type="range" data-setting="flowOpacity" min="0.1" max="1" step="0.01" value="0.8" />
+          </label>
+          <p class="hint">Cool origin → warm destination, with a glow travelling each trip. Follows the time slider.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>311 reports</span>
+            </button>
+            <button type="button" class="section-info" data-info="events" aria-label="About 311 reports">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="events" />
+            <span>Show 311 complaints</span>
+          </label>
+          <label>
+            <span>Size<em data-value="eventSize"></em></span>
+            <input type="range" data-setting="eventSize" min="40" max="220" step="5" value="110" />
+          </label>
+          <label>
+            <span>Hour spread<em data-value="eventWindow"></em></span>
+            <input type="range" data-setting="eventWindow" min="0.4" max="4" step="0.1" value="1.6" />
+          </label>
+          <label>
+            <span>Opacity<em data-value="eventOpacity"></em></span>
+            <input type="range" data-setting="eventOpacity" min="0.1" max="1" step="0.01" value="0.9" />
+          </label>
+          <p class="hint">Points surface at the hour each was logged. Pink noise · amber vehicle · cyan street life · green buildings.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
               <span>Environment</span>
               <span class="chev" aria-hidden="true">+</span>
             </button>
@@ -1419,6 +1620,18 @@
           <button type="submit" class="dialog-save panel-reset">Save theme</button>
         </div>
       </form>
+    </dialog>
+
+    <!-- Per-section help. Title + body are filled from SECTION_INFO in main.js when an
+         info button (.section-info[data-info]) is clicked. -->
+    <dialog id="info-dialog" class="info-dialog">
+      <div class="info-dialog-body">
+        <h3 id="info-dialog-title"></h3>
+        <div class="info-dialog-text" id="info-dialog-text"></div>
+        <div class="dialog-actions">
+          <button type="button" class="dialog-close panel-reset" autofocus>Close</button>
+        </div>
+      </div>
     </dialog>
 
     <script type="importmap">
