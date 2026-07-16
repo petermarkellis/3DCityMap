@@ -336,6 +336,20 @@ const bloom = new UnrealBloomPass(
         //             lanes with traffic on them actually glow
 );
 composer.addPass(bloom);
+
+// Bloom at full render resolution — half-res saved GPU but softened the thin trail
+// glows into mush, and the trails are the whole picture. Kept behind this helper (and
+// re-applied after any composer.setSize) so the scale is a single number to revisit.
+const BLOOM_RESOLUTION_SCALE = 1;
+function applyBloomResolution() {
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  bloom.setSize(
+    Math.max(1, Math.round(size.x * BLOOM_RESOLUTION_SCALE)),
+    Math.max(1, Math.round(size.y * BLOOM_RESOLUTION_SCALE)),
+  );
+}
+applyBloomResolution();
+
 composer.addPass(new OutputPass());
 
 // Contrast runs *after* OutputPass, so it works on final display-referred sRGB
@@ -1669,7 +1683,7 @@ function applyBuildingPalette() {
 // a reflection that soft, so a low rate is free.
 // ---------------------------------------------------------------------------
 
-const PROBE_INTERVAL = 0.25; // seconds
+const PROBE_INTERVAL = 0.4; // seconds (2.5 Hz) — the reflection is heavily blurred, so a lower rate is invisible and saves the 6-face cube render + PMREM 2.5×/s instead of 4×/s
 const probeTarget = new THREE.WebGLCubeRenderTarget(128, { type: THREE.HalfFloatType });
 const probeCamera = new THREE.CubeCamera(1, 3000, probeTarget);
 probeCamera.position.set(0, 40, 20);
@@ -1895,6 +1909,10 @@ const ROAD_CLASSES = [
   { match: ['primary', 'primary_link', 'secondary', 'secondary_link'], width: 0.18, rise: 0.50, speed: 15 },
   { match: null, width: 0.11, rise: 0.36, speed: 10 }, // everything else
 ];
+
+// Turn bias by road class (arterials pull more traffic). Hoisted so chooseNextEdge
+// doesn't allocate this literal on every candidate at every junction.
+const ROAD_CLASS_WEIGHT = [3.0, 1.6, 1.0];
 
 // How far apart, in scene units, the heat samples sit along a road. THIS is the
 // resolution of the light trail, and it is why the trail no longer comes out in
@@ -2270,6 +2288,7 @@ function paintEdge(edge) {
 
 const taxis = []; // always holds TAXI_COUNT objects; only the first `activeTaxis` drive
 const hotEdges = new Set();
+const heatTouched = new Set(); // reused each decayHeat frame instead of a fresh Set
 
 // How many of the fleet are currently on shift, and the hour that count was set for.
 // Everything past activeTaxis is parked: not updated, laying no trail.
@@ -2377,7 +2396,7 @@ function chooseNextEdge(taxi) {
     // Prefer going straight on, and prefer the bigger road.
     const straightness = (inX * outX + inZ * outZ) / (inLength * outLength);
     let weight = Math.pow(Math.max(0.05, (straightness + 1) / 2), 3);
-    weight *= [3.0, 1.6, 1.0][edge.klass];
+    weight *= ROAD_CLASS_WEIGHT[edge.klass];
     if (index === taxi.edge && candidates.length > 1) weight *= 0.02; // no U-turns
 
     weights.push(weight);
@@ -2790,7 +2809,7 @@ function decayHeat(dt) {
 
   const halfLife = TRAIL_DECAY[settings.trailDecay] ?? TRAIL_DECAY.long;
   const decay = Math.pow(0.5, dt / halfLife);
-  const touched = new Set();
+  heatTouched.clear();
 
   for (const edge of hotEdges) {
     const layer = roadLayers[edge.klass];
@@ -2816,10 +2835,10 @@ function decayHeat(dt) {
     }
 
     paintEdge(edge);
-    touched.add(edge.klass);
+    heatTouched.add(edge.klass);
   }
 
-  for (const klass of touched) {
+  for (const klass of heatTouched) {
     const layer = roadLayers[klass];
     if (layer) layer.attribute.needsUpdate = true;
   }
@@ -3156,6 +3175,7 @@ async function renderAtResolution(width, height) {
   composer.setPixelRatio(prevPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   composer.setSize(window.innerWidth, window.innerHeight);
+  applyBloomResolution();
   camera.aspect = prevAspect;
   camera.updateProjectionMatrix();
 
@@ -3241,6 +3261,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
+  applyBloomResolution(); // composer.setSize reset bloom to full res; halve it again
   // The road ribbons are ordinary world-space geometry, so a resize costs them
   // nothing — the camera projection alone takes care of them.
 });
