@@ -31,7 +31,7 @@ export default {
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.
-  buildingsVisible: true, buildingOpacity: 1.00, reflectTrails: true,
+  buildingsVisible: true, buildingOpacity: 1.00, reflectTrails: false,
   buildingRoughness: 0.72, buildingMetalness: 0.15,
   buildingSpecular: 1.00, buildingDiffuse: 1.00,
   buildingSheen: 0.40, buildingGrain: 0.35, buildingVariation: 0.35,

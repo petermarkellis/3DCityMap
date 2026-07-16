@@ -1210,11 +1210,11 @@
           </label>
         </section>
 
-        <section data-collapsed>
+        <section>
           <h2>
-            <button type="button" class="section-toggle" aria-expanded="false">
-              <span>Taxi trails</span>
-              <span class="chev" aria-hidden="true">+</span>
+            <button type="button" class="section-toggle" aria-expanded="true">
+              <span>Time of day</span>
+              <span class="chev" aria-hidden="true">−</span>
             </button>
           </h2>
           <label>
@@ -1224,6 +1224,19 @@
           <label class="check">
             <input type="checkbox" data-setting="liveTime" checked />
             <span>Live (follow clock)</span>
+          </label>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Taxis</span>
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="taxisVisible" checked />
+            <span>Show taxis</span>
           </label>
           <label class="swatch">
             <span>Head</span>
@@ -1334,6 +1347,106 @@
         <section data-collapsed>
           <h2>
             <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Collisions</span>
+            </button>
+            <button type="button" class="section-info" data-info="collisions" aria-label="About collisions">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="collisions" />
+            <span>Show vehicle collisions</span>
+          </label>
+          <label>
+            <span>Size<em data-value="collisionSize"></em></span>
+            <input type="range" data-setting="collisionSize" min="40" max="220" step="5" value="120" />
+          </label>
+          <label>
+            <span>Hour spread<em data-value="collisionWindow"></em></span>
+            <input type="range" data-setting="collisionWindow" min="0.4" max="4" step="0.1" value="1.4" />
+          </label>
+          <label>
+            <span>Opacity<em data-value="collisionOpacity"></em></span>
+            <input type="range" data-setting="collisionOpacity" min="0.1" max="1" step="0.01" value="0.9" />
+          </label>
+          <p class="hint">Red fatal · orange injury · blue property-only. Aggregated by time of day.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Crime</span>
+            </button>
+            <button type="button" class="section-info" data-info="crime" aria-label="About crime reports">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="crime" />
+            <span>Show reported crime</span>
+          </label>
+          <label>
+            <span>Size<em data-value="crimeSize"></em></span>
+            <input type="range" data-setting="crimeSize" min="40" max="220" step="5" value="90" />
+          </label>
+          <label>
+            <span>Hour spread<em data-value="crimeWindow"></em></span>
+            <input type="range" data-setting="crimeWindow" min="0.4" max="4" step="0.1" value="1.2" />
+          </label>
+          <label>
+            <span>Opacity<em data-value="crimeOpacity"></em></span>
+            <input type="range" data-setting="crimeOpacity" min="0.1" max="1" step="0.01" value="0.85" />
+          </label>
+          <p class="hint">Pink felony · amber misdemeanour · cyan violation. Aggregated by time of day.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Citi Bike</span>
+            </button>
+            <button type="button" class="section-info" data-info="citibike" aria-label="About Citi Bike flows">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="citibike" />
+            <span>Show bike trails</span>
+          </label>
+          <label class="swatch">
+            <span>Head</span>
+            <input type="color" data-setting="citibikeHead" value="#e9fff2" />
+          </label>
+          <label class="swatch">
+            <span>Tail</span>
+            <input type="color" data-setting="citibikeTail" value="#22c98a" />
+          </label>
+          <label class="pick">
+            <span>Decay</span>
+            <select data-setting="citibikeDecay">
+              <option value="short">Short</option>
+              <option value="long">Long</option>
+            </select>
+          </label>
+          <label>
+            <span>Opacity<em data-value="citibikeOpacity"></em></span>
+            <input type="range" data-setting="citibikeOpacity" min="0.15" max="1" step="0.01" value="0.85" />
+          </label>
+          <p class="hint">Bikes ride real start → drop-off routes, leaving light trails like the taxis. Follows the time slider.</p>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
               <span>Environment</span>
               <span class="chev" aria-hidden="true">+</span>
             </button>
@@ -1393,7 +1506,7 @@
             <input type="color" data-setting="buildingColor" value="#16181e" />
           </label>
           <label class="check">
-            <input type="checkbox" data-setting="reflectTrails" checked />
+            <input type="checkbox" data-setting="reflectTrails" />
             <span>Reflect trails</span>
           </label>
           <label>

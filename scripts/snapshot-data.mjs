@@ -13,6 +13,10 @@
 // if you move the city or change the queries.
 
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const BBOX = { minLat: 40.700, maxLat: 40.762, minLon: -74.019, maxLon: -73.968 };
 const CENTER_LAT = (BBOX.minLat + BBOX.maxLat) / 2;
@@ -44,6 +48,20 @@ const SOCRATA_RESOURCE = 'https://data.cityofnewyork.us/resource/2yzn-sicd.json'
 const EVENTS_DAY = '2024-06-12';   // a normal recent Wednesday
 const EVENTS_LIMIT = 8000;         // a full bbox-day is ~600 rows; this never truncates
 const EVENTS_RESOURCE = 'https://data.cityofnewyork.us/resource/erm2-nwe9.json';
+
+// Collisions + crime: sparse point datasets, so aggregate a wide window by time of day
+// (a single day is too thin to read). Both are geocoded Socrata sets like 311.
+const COLLISIONS_RESOURCE = 'https://data.cityofnewyork.us/resource/h9gi-nx95.json';
+const COLLISIONS_RANGE = ["2023-01-01T00:00:00", "2023-12-31T23:59:59"]; // one year
+const CRIME_RESOURCE = 'https://data.cityofnewyork.us/resource/qgea-i56i.json';
+const CRIME_RANGE = ["2023-06-01T00:00:00", "2023-06-30T23:59:59"];      // one month
+
+// Citi Bike: not on Socrata — monthly CSV zips on S3 (100 MB–1 GB, several parts). We
+// download the smallest recent month, stream every part through unzip, and keep one
+// representative weekday's rides whose start is in the bbox.
+const CITIBIKE_ZIP = 'https://s3.amazonaws.com/tripdata/202604-citibike-tripdata.zip';
+const CITIBIKE_DAY = '2026-04-15';   // a normal Wednesday inside that month
+const CITIBIKE_SAMPLE = 12000;       // trim to keep the file lean; the layer draws ~6k
 
 const OVERPASS_MIRRORS = [
   'https://overpass-api.de/api/interpreter',
@@ -175,6 +193,99 @@ async function fetch311(appToken) {
   return rows.filter((r) => r.longitude && r.latitude);
 }
 
+// Motor-vehicle collisions in the bbox over COLLISIONS_RANGE. Keeps coords + time +
+// the injury/fatality counts the app turns into a severity category.
+async function fetchCollisions(appToken) {
+  const where = `latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
+    + ` and longitude between ${BBOX.minLon} and ${BBOX.maxLon}`
+    + ` and crash_date between '${COLLISIONS_RANGE[0]}' and '${COLLISIONS_RANGE[1]}'`;
+  const select = 'longitude,latitude,crash_time,number_of_persons_injured,number_of_persons_killed';
+  const url = `${COLLISIONS_RESOURCE}?$select=${encodeURIComponent(select)}`
+    + `&$where=${encodeURIComponent(where)}&$order=${encodeURIComponent('crash_time')}&$limit=20000`;
+  const rows = await socrata(url, appToken);
+  return rows.filter((r) => r.longitude && r.latitude);
+}
+
+// NYPD crime complaints in the bbox over CRIME_RANGE. Keeps coords + time + the legal
+// class the app colours by.
+async function fetchCrime(appToken) {
+  const where = `latitude between ${BBOX.minLat} and ${BBOX.maxLat}`
+    + ` and longitude between ${BBOX.minLon} and ${BBOX.maxLon}`
+    + ` and cmplnt_fr_dt between '${CRIME_RANGE[0]}' and '${CRIME_RANGE[1]}'`;
+  const select = 'longitude,latitude,cmplnt_fr_tm,law_cat_cd';
+  const url = `${CRIME_RESOURCE}?$select=${encodeURIComponent(select)}`
+    + `&$where=${encodeURIComponent(where)}&$order=${encodeURIComponent('cmplnt_fr_tm')}&$limit=20000`;
+  const rows = await socrata(url, appToken);
+  return rows.filter((r) => r.longitude && r.latitude);
+}
+
+// Quote-aware split for one CSV line (station-name columns contain commas).
+function csvSplit(line) {
+  const out = [];
+  let cur = '';
+  let q = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i += 1; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+// Stream one zip member (a CSV part) through `unzip -p` and keep matching rides.
+function streamCitibikePart(zipPath, part, rows) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('unzip', ['-p', zipPath, part]);
+    const rl = createInterface({ input: proc.stdout });
+    rl.on('line', (line) => {
+      if (!line || line.startsWith('ride_id')) return; // header
+      const f = csvSplit(line);
+      const started = f[2];
+      if (!started || started.slice(0, 10) !== CITIBIKE_DAY) return;
+      const slat = +f[8], slng = +f[9], elat = +f[10], elng = +f[11];
+      if (![slat, slng, elat, elng].every(Number.isFinite)) return;
+      if (slat < BBOX.minLat || slat > BBOX.maxLat || slng < BBOX.minLon || slng > BBOX.maxLon) return;
+      const hour = parseInt(started.slice(11, 13), 10);
+      if (!(hour >= 0 && hour < 24)) return;
+      rows.push({ start_lng: slng, start_lat: slat, end_lng: elng, end_lat: elat, hour });
+    });
+    rl.on('close', resolve);
+    proc.on('error', reject);
+  });
+}
+
+// Download the month zip, stream every CSV part, keep one weekday's bbox rides, and trim
+// to a lean, hourly-representative sample (shuffle → slice).
+async function fetchCitibike() {
+  const zipPath = join(tmpdir(), 'citibike-snapshot.zip');
+  console.log('  downloading month zip (this is the big one)…');
+  const res = await fetch(CITIBIKE_ZIP);
+  if (!res.ok) throw new Error(`Citi Bike zip HTTP ${res.status}`);
+  await writeFile(zipPath, Buffer.from(await res.arrayBuffer()));
+
+  // List the CSV members and stream each.
+  const parts = await new Promise((resolve, reject) => {
+    const proc = spawn('unzip', ['-Z1', zipPath]);
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d; });
+    proc.on('close', () => resolve(out.split('\n').filter((n) => n.endsWith('.csv'))));
+    proc.on('error', reject);
+  });
+
+  const rows = [];
+  for (const part of parts) await streamCitibikePart(zipPath, part, rows);
+
+  // Trim: shuffle then slice, so the kept rides stay spread across the day.
+  for (let i = rows.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rows[i], rows[j]] = [rows[j], rows[i]];
+  }
+  return rows.slice(0, CITIBIKE_SAMPLE);
+}
+
 async function save(name, data) {
   const path = `data/${name}`;
   await writeFile(path, JSON.stringify(data));
@@ -209,6 +320,25 @@ async function main() {
   const events = await fetch311(appToken);
   console.log(`  ${events.length} located complaints`);
   await save('events-311.json', events);
+
+  console.log('Fetching collisions (Socrata, 2023, by time of day)…');
+  const collisions = await fetchCollisions(appToken);
+  console.log(`  ${collisions.length} located collisions`);
+  await save('collisions.json', collisions);
+
+  console.log('Fetching crime (Socrata, June 2023, by time of day)…');
+  const crime = await fetchCrime(appToken);
+  console.log(`  ${crime.length} located complaints`);
+  await save('crime.json', crime);
+
+  console.log(`Fetching Citi Bike (${CITIBIKE_DAY}, monthly CSV zip)…`);
+  try {
+    const citibike = await fetchCitibike();
+    console.log(`  ${citibike.length} rides kept`);
+    await save('citibike.json', citibike);
+  } catch (error) {
+    console.warn(`  Citi Bike skipped: ${error.message}`);
+  }
 
   console.log('\nDone. Commit data/*.json (or host them) and the app will prefer them.');
 }

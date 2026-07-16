@@ -265,10 +265,12 @@ const settings = {
   buildingSheenColor: '#3d2417',
   buildingGrain: 0.35,
   buildingVariation: 0.35,
-  reflectTrails: true,
+  reflectTrails: false,
   showEdges: true,
   depthOfField: true,
   dofStrength: 0.45,
+  // Whether the glowing taxi trails are drawn. The dim road network stays either way.
+  taxisVisible: true,
   // Read fresh every frame by decayHeat, so there is nothing to apply on change.
   trailDecay: 'long',
   trailOpacity: 0.82,
@@ -294,6 +296,23 @@ const settings = {
   eventOpacity: 0.9,
   eventSize: 110,     // point size in screen pixels
   eventWindow: 1.6,   // ± hours of complaints shown around the clock
+  // Collisions (points), crime (points), Citi Bike (arcs) — extra datasets on the
+  // reusable layer factories. Same knob shapes as their prototypes above.
+  collisions: false,
+  collisionSize: 120,
+  collisionWindow: 1.4,
+  collisionOpacity: 0.9,
+  crime: false,
+  crimeSize: 90,
+  crimeWindow: 1.2,
+  crimeOpacity: 0.85,
+  // Citi Bike is a second light-trail fleet (bikes riding real start→dropoff routes),
+  // so it carries the same trail controls as the taxis rather than arc controls.
+  citibike: false,
+  citibikeHead: '#e9fff2',
+  citibikeTail: '#22c98a',
+  citibikeDecay: 'long',
+  citibikeOpacity: 0.85,
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -980,6 +999,11 @@ function applyTimeOfDay() {
     setActiveFleet(targetFleetSize());
     publishStats({ taxis: activeTaxis });
   }
+  // The bike fleet follows the same clock — scale it to this hour's real ride volume.
+  if (hour !== bikeFleetHour) {
+    bikeFleetHour = hour;
+    setBikeFleet(targetBikeFleet());
+  }
 }
 
 // Once a minute of real time (while liveTime is on), advance the clock. Cheap: it
@@ -1210,6 +1234,9 @@ const SNAPSHOT_FILES = {
   water: 'data/water.json',
   demand: 'data/taxi-demand.json',
   events: 'data/events-311.json',
+  collisions: 'data/collisions.json',
+  crime: 'data/crime.json',
+  citibike: 'data/citibike.json',
 };
 
 async function loadSnapshot(path) {
@@ -2010,6 +2037,7 @@ function roadClassIndex(tags) {
 const nodes = []; // { x, z, edges: [edgeIndex] }
 const edges = []; // { a, b, length, klass, sampleStart, sampleCount, quadStart }
 const roadLayers = []; // one mesh per class, plus its heat buffers
+const bikeLayers = []; // the Citi Bike fleet's own heat layers, same geometry
 
 function buildRoadNetwork(elements) {
   const nodeIds = new Map();
@@ -2127,6 +2155,7 @@ function buildRoadNetwork(elements) {
     const count = quadCounts[i];
     if (count === 0) {
       roadLayers.push(null);
+      bikeLayers.push(null);
       return;
     }
 
@@ -2200,6 +2229,40 @@ function buildRoadNetwork(elements) {
 
     // Mutate the heat buffers in place rather than rebuilding them every frame.
     roadLayers.push({ mesh, material, samples, heat, attribute: heatAttribute });
+
+    // The Citi Bike layer shares this class's static geometry (position/rise/index) but
+    // carries its own heat channel and gradient, drawn a hair above the taxi trail so
+    // the two never z-fight. Hidden until the Citi Bike toggle is on.
+    const bikeHeat = new Uint8Array(count * 8);
+    const bikeHeatAttribute = new THREE.BufferAttribute(bikeHeat, 1, true);
+    bikeHeatAttribute.setUsage(THREE.DynamicDrawUsage);
+
+    const bikeGeometry = new THREE.BufferGeometry();
+    bikeGeometry.setAttribute('position', geometry.getAttribute('position'));
+    bikeGeometry.setAttribute('heat', bikeHeatAttribute);
+    bikeGeometry.setAttribute('rise', geometry.getAttribute('rise'));
+    bikeGeometry.setIndex(geometry.getIndex());
+
+    const bikeMaterial = new THREE.ShaderMaterial({
+      uniforms: bikeTrailUniforms,
+      vertexShader: TRAIL_VERTEX_SHADER,
+      fragmentShader: TRAIL_FRAGMENT_SHADER,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    const bikeMesh = new THREE.Mesh(bikeGeometry, bikeMaterial);
+    bikeMesh.position.y = 0.16; // a hair above the taxi trails
+    bikeMesh.renderOrder = 2;
+    bikeMesh.visible = settings.citibike;
+    scene.add(bikeMesh);
+
+    bikeLayers.push({
+      mesh: bikeMesh, material: bikeMaterial,
+      samples: new Float32Array(sampleCounts[i]), heat: bikeHeat, attribute: bikeHeatAttribute,
+    });
   });
 }
 
@@ -2209,6 +2272,10 @@ function buildRoadNetwork(elements) {
 // orange down to near-zero green and blue and the whole city would glow red.
 const tailColor = new THREE.Color().setStyle(settings.trailTail, THREE.LinearSRGBColorSpace);
 const headColor = new THREE.Color().setStyle(settings.trailHead, THREE.LinearSRGBColorSpace);
+
+// The Citi Bike fleet's own gradient (see the bike trail system below).
+const bikeTailColor = new THREE.Color().setStyle(settings.citibikeTail, THREE.LinearSRGBColorSpace);
+const bikeHeadColor = new THREE.Color().setStyle(settings.citibikeHead, THREE.LinearSRGBColorSpace);
 
 // Heat *is* distance behind the vehicle: the point a taxi is on right now sits at
 // 1 and everything it has already left is decaying toward 0. So mapping the
@@ -2227,6 +2294,14 @@ const trailUniforms = {
   tail: { value: tailColor },
   head: { value: headColor },
   opacity: { value: settings.trailOpacity },
+};
+
+// The Citi Bike fleet reuses the same trail shaders with its own gradient + opacity,
+// so bike trails sit alongside the taxi trails in their own colour.
+const bikeTrailUniforms = {
+  tail: { value: bikeTailColor },
+  head: { value: bikeHeadColor },
+  opacity: { value: settings.citibikeOpacity },
 };
 
 // How the fins shade from their base to their top.
@@ -2319,7 +2394,11 @@ const ROAD_LINE_FRAGMENT_SHADER = /* glsl */`
 `;
 
 function applyTrailGradient(key, hex) {
-  const target = key === 'trailHead' ? headColor : tailColor;
+  const target =
+    key === 'trailHead' ? headColor
+      : key === 'trailTail' ? tailColor
+        : key === 'citibikeHead' ? bikeHeadColor
+          : bikeTailColor; // citibikeTail
   target.setStyle(hex, THREE.LinearSRGBColorSpace);
 }
 
@@ -2923,6 +3002,233 @@ function decayHeat(dt) {
 }
 
 // ---------------------------------------------------------------------------
+// Citi Bike — a second light-trail fleet. Same heat-on-the-network machinery as the
+// taxis, but each bike rides a REAL ride: it spawns at a real start station and heads
+// for that ride's drop-off station via a distance-biased walk, so the trails pile up
+// on the corridors bikes actually use. Its own heat layers (bikeLayers), its own hot
+// set, and its own gradient/decay controls, so it reads as bikes, not cabs.
+// ---------------------------------------------------------------------------
+
+const bikeHotEdges = new Set();
+const bikeTouched = new Set();
+
+function paintBikeEdge(edge) {
+  const layer = bikeLayers[edge.klass];
+  if (!layer) return;
+  const { samples, heat } = layer;
+  const quads = edge.sampleCount - 1;
+  for (let q = 0; q < quads; q += 1) {
+    const a = samples[edge.sampleStart + q] * 255;
+    const b = samples[edge.sampleStart + q + 1] * 255;
+    const offset = (edge.quadStart + q) * 8;
+    heat[offset] = a; heat[offset + 1] = a; heat[offset + 2] = b; heat[offset + 3] = b;
+    heat[offset + 4] = a; heat[offset + 5] = a; heat[offset + 6] = b; heat[offset + 7] = b;
+  }
+}
+
+function depositBikeHeat(edge, toB, amount) {
+  const layer = bikeLayers[edge.klass];
+  if (!layer) return;
+  const { samples } = layer;
+  const last = edge.sampleCount - 1;
+  const at = toB * last;
+  const i = Math.min(last - 1, Math.max(0, Math.floor(at)));
+  const frac = at - i;
+  const a = edge.sampleStart + i;
+  samples[a] = Math.min(1, samples[a] + amount * (1 - frac));
+  samples[a + 1] = Math.min(1, samples[a + 1] + amount * frac);
+  bikeHotEdges.add(edge);
+}
+
+function decayBikeHeat(dt) {
+  if (bikeHotEdges.size === 0) return;
+  const halfLife = TRAIL_DECAY[settings.citibikeDecay] ?? TRAIL_DECAY.long;
+  const decay = Math.pow(0.5, dt / halfLife);
+  bikeTouched.clear();
+  for (const edge of bikeHotEdges) {
+    const layer = bikeLayers[edge.klass];
+    if (!layer) continue;
+    const { samples } = layer;
+    const start = edge.sampleStart;
+    const end = start + edge.sampleCount;
+    let peak = 0;
+    for (let s = start; s < end; s += 1) {
+      const value = samples[s] * decay;
+      samples[s] = value;
+      if (value > peak) peak = value;
+    }
+    if (peak < 0.004) { samples.fill(0, start, end); bikeHotEdges.delete(edge); }
+    paintBikeEdge(edge);
+    bikeTouched.add(edge.klass);
+  }
+  for (const klass of bikeTouched) {
+    const layer = bikeLayers[klass];
+    if (layer) layer.attribute.needsUpdate = true;
+  }
+}
+
+// --- Bike demand: real start→drop-off pairs, snapped to graph nodes, indexed by hour.
+let bikeDemand = null;
+function buildBikeDemand(rows) {
+  if (!Array.isArray(rows) || rows.length === 0 || nodes.length === 0) return null;
+  const grid = buildNodeGrid(6);
+  const byHour = Array.from({ length: 24 }, () => []);
+  const all = [];
+  for (const r of rows) {
+    const slon = parseFloat(r.start_lng), slat = parseFloat(r.start_lat);
+    const elon = parseFloat(r.end_lng), elat = parseFloat(r.end_lat);
+    if (![slon, slat, elon, elat].every(Number.isFinite)) continue;
+    const s = toLocal(slon, slat);
+    const e = toLocal(elon, elat);
+    const startNode = nearestNode(grid, s.x, s.z);
+    const destNode = nearestNode(grid, e.x, e.z);
+    if (startNode < 0 || destNode < 0 || startNode === destNode) continue;
+    const hour = parseInt(r.hour, 10);
+    const ride = { startNode, destNode };
+    all.push(ride);
+    if (hour >= 0 && hour < 24) byHour[hour].push(ride);
+  }
+  if (all.length === 0) return null;
+  const hourCounts = byHour.map((l) => l.length);
+  const peak = Math.max(1, ...hourCounts);
+  return { byHour, all, hourVolume: hourCounts.map((c) => c / peak) };
+}
+
+// Pick a real ride for the current hour (falling back to all hours when a bucket is thin).
+function bikeRide() {
+  if (!bikeDemand) return null;
+  const pool = bikeDemand.byHour[currentHour()];
+  const use = pool && pool.length ? pool : bikeDemand.all;
+  return use.length ? use[Math.floor(Math.random() * use.length)] : null;
+}
+
+// --- Bike fleet -----------------------------------------------------------
+const BIKE_COUNT = 700;        // pool size; the active count scales with the hour
+const MIN_BIKE_FLEET = 70;
+const BIKE_SPEED_MPS = 4.6;    // ~16 km/h — noticeably slower than the cabs
+const BIKE_MAX_LIFE = 45;      // seconds before a stuck bike gives up and re-rides
+const BIKE_DEST_BIAS = 3.0;    // higher = more directly it heads for the drop-off
+
+const bikes = [];
+let activeBikes = 0;
+let bikeFleetHour = -1;
+
+function placeBike(bike) {
+  const ride = bikeRide();
+  bike.pending = null;
+  bike.speed = BIKE_SPEED_MPS * bike.cruise;
+  bike.life = BIKE_MAX_LIFE;
+  if (ride && nodes[ride.startNode] && nodes[ride.startNode].edges.length > 0) {
+    const node = nodes[ride.startNode];
+    const edgeIndex = node.edges[Math.floor(Math.random() * node.edges.length)];
+    bike.edge = edgeIndex;
+    bike.node = edgeExit(edges[edgeIndex], ride.startNode); // heading away from the station
+    bike.dest = ride.destNode;
+    bike.progress = Math.random() * 0.15;
+    return;
+  }
+  // No demand (or a dead-end station) — fall back to a random block and target.
+  const index = Math.floor(Math.random() * edges.length);
+  const edge = edges[index];
+  bike.edge = index;
+  bike.node = Math.random() < 0.5 ? edge.a : edge.b;
+  bike.dest = Math.random() < 0.5 ? edge.a : edge.b;
+  bike.progress = Math.random();
+}
+
+// The destination-biased pick: among the edges leaving a junction, favour the one that
+// most reduces the straight-line distance to the drop-off, with a nudge for going
+// straight and a little randomness so a whole hour's bikes don't overlay one path.
+function chooseBikeEdge(bike) {
+  const node = nodes[bike.node];
+  const candidates = node.edges;
+  if (candidates.length === 0) return null;
+  const dest = nodes[bike.dest];
+  const curD = Math.hypot(node.x - dest.x, node.z - dest.z) || 1;
+
+  const current = edges[bike.edge];
+  const from = nodes[edgeExit(current, bike.node)];
+  const inX = node.x - from.x, inZ = node.z - from.z;
+  const inLen = Math.hypot(inX, inZ) || 1;
+
+  let total = 0;
+  const weights = [];
+  for (let k = 0; k < candidates.length; k += 1) {
+    const index = candidates[k];
+    const edge = edges[index];
+    const next = nodes[edgeExit(edge, bike.node)];
+    const outX = next.x - node.x, outZ = next.z - node.z;
+    const outLen = Math.hypot(outX, outZ) || 1;
+    const nextD = Math.hypot(next.x - dest.x, next.z - dest.z);
+    const gain = (curD - nextD) / outLen;           // toward-dest progress, ~[-1, 1]
+    const straightness = (inX * outX + inZ * outZ) / (inLen * outLen);
+    let weight = Math.exp(gain * BIKE_DEST_BIAS) * (0.4 + 0.6 * Math.max(0, straightness) + 0.15);
+    if (index === bike.edge && candidates.length > 1) weight *= 0.02; // no U-turns
+    weights.push(weight);
+    total += weight;
+  }
+
+  let pick = candidates.length - 1;
+  let roll = Math.random() * total;
+  for (let k = 0; k < candidates.length; k += 1) {
+    roll -= weights[k];
+    if (roll <= 0) { pick = k; break; }
+  }
+  return { index: candidates[pick] };
+}
+
+function updateBikes(dt) {
+  for (let i = 0; i < activeBikes; i += 1) {
+    const bike = bikes[i];
+    bike.life -= dt;
+    if (bike.life <= 0) { placeBike(bike); continue; }
+
+    let edge = edges[bike.edge];
+    if (!bike.pending) bike.pending = chooseBikeEdge(bike);
+
+    bike.progress += (bike.speed * UNITS_PER_METRE * dt) / edge.length;
+
+    let guard = 0;
+    while (bike.progress >= 1 && guard < 8) {
+      guard += 1;
+      const arrived = bike.node;
+      if (arrived === bike.dest) { placeBike(bike); edge = edges[bike.edge]; break; } // ride done
+      const next = bike.pending ?? chooseBikeEdge(bike);
+      if (next === null) { placeBike(bike); edge = edges[bike.edge]; break; }
+      depositBikeHeat(edge, bike.node === edge.b ? 1 : 0, HEAT_RATE * dt);
+      bike.edge = next.index;
+      bike.pending = null;
+      edge = edges[next.index];
+      bike.node = edgeExit(edge, arrived);
+      bike.progress -= 1;
+    }
+    if (bike.progress >= 1) bike.progress = 0;
+
+    const toB = bike.node === edge.b ? bike.progress : 1 - bike.progress;
+    depositBikeHeat(edge, toB, HEAT_RATE * dt);
+  }
+}
+
+function targetBikeFleet() {
+  if (!bikeDemand) return 0;
+  return Math.max(MIN_BIKE_FLEET, Math.round(BIKE_COUNT * bikeDemand.hourVolume[currentHour()]));
+}
+
+function setBikeFleet(n) {
+  n = Math.max(0, Math.min(bikes.length, n));
+  for (let i = activeBikes; i < n; i += 1) placeBike(bikes[i]);
+  activeBikes = n;
+}
+
+function spawnBikes() {
+  for (let i = 0; i < BIKE_COUNT; i += 1) {
+    const bike = { edge: 0, node: 0, dest: 0, progress: 0, speed: 0, cruise: cruiseTrait(), pending: null, life: 0 };
+    placeBike(bike);
+    bikes.push(bike);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Taxi density heatmap — a live choropleth painted onto the buildings.
 //
 // Every active cab is splatted into a coarse grid over the map each tick, with a
@@ -3315,6 +3621,297 @@ function updateOverlays(dt) {
     eventsMat.uniforms.uSize.value = settings.eventSize;
     eventsMat.uniforms.uOpacity.value = settings.eventOpacity;
   }
+  // The extra datasets (collisions, crime, Citi Bike) go through the registry.
+  for (const layer of overlayLayers) {
+    if (!layer.mesh.visible) continue;
+    const u = layer.material.uniforms;
+    u.uHour.value = hour;
+    u.uTime.value = overlayTime;
+    u.uWindow.value = settings[layer.keys.window];
+    if (layer.kind === 'arc') {
+      u.uFlowOpacity.value = settings[layer.keys.opacity];
+      layer.material.linewidth = settings[layer.keys.width];
+    } else {
+      u.uSize.value = settings[layer.keys.size];
+      u.uOpacity.value = settings[layer.keys.opacity];
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reusable layer factories. Flows and 311 above were the prototypes; these are the
+// generalised versions the extra datasets ride on, so adding collisions, crime or
+// Citi Bike is a config block (accessors + colours + which settings keys tune it),
+// not new rendering. Each registers in overlayLayers so updateOverlays/applySetting
+// drive and toggle them generically.
+// ---------------------------------------------------------------------------
+
+const overlayLayers = [];
+function registerOverlay(layer) {
+  overlayLayers.push(layer);
+  scene.add(layer.mesh);
+  return layer;
+}
+
+// Point layer (311, collisions, crime): glowing category-coloured points that surface
+// at their hour. config: lon/lat/hour/category accessors, a colours array, settings keys.
+function buildPointLayer(rows, config) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const cfg = { y: 2.0, renderOrder: 4, ...config };
+
+  const pos = [];
+  const aHour = [];
+  const aCat = [];
+  const aSeed = [];
+  for (const r of rows) {
+    const lon = cfg.lon(r);
+    const lat = cfg.lat(r);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const hour = cfg.hour(r);
+    if (!(hour >= 0 && hour < 24)) continue;
+    const l = toLocal(lon, lat);
+    pos.push(l.x, cfg.y, l.z); // lifted just off the street so the glow clears the roads
+    aHour.push(hour);
+    aCat.push(cfg.category(r));
+    aSeed.push(Math.random());
+  }
+  if (pos.length === 0) return null;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aHour', new THREE.Float32BufferAttribute(aHour, 1));
+  geo.setAttribute('aCat', new THREE.Float32BufferAttribute(aCat, 1));
+  geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(aSeed, 1));
+
+  // Up to six fixed category colours, passed as separate uniforms (a ternary chain picks
+  // one) so this compiles on GLSL1 — dynamic uniform-array indexing needs GLSL3.
+  const c = [];
+  for (let i = 0; i < 6; i += 1) c.push(new THREE.Color(cfg.colors[Math.min(i, cfg.colors.length - 1)]));
+
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uHour: { value: 12 },
+      uWindow: { value: settings[cfg.keys.window] },
+      uTime: { value: 0 },
+      uSize: { value: settings[cfg.keys.size] },
+      uOpacity: { value: settings[cfg.keys.opacity] },
+      uC0: { value: c[0] }, uC1: { value: c[1] }, uC2: { value: c[2] },
+      uC3: { value: c[3] }, uC4: { value: c[4] }, uC5: { value: c[5] },
+    },
+    vertexShader: /* glsl */`
+      attribute float aHour;
+      attribute float aCat;
+      attribute float aSeed;
+      uniform float uHour, uWindow, uTime, uSize;
+      varying float vCat;
+      varying float vVis;
+      void main() {
+        vCat = aCat;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float d = abs(aHour - uHour);
+        d = min(d, 24.0 - d);
+        vVis = smoothstep(uWindow, 0.0, d);
+        float breathe = 0.85 + 0.15 * sin(uTime * 2.2 + aSeed * 6.2831);
+        gl_PointSize = uSize * (0.35 + 1.15 * vVis) * breathe * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision mediump float;
+      uniform float uOpacity;
+      uniform vec3 uC0, uC1, uC2, uC3, uC4, uC5;
+      varying float vCat;
+      varying float vVis;
+      void main() {
+        if (vVis <= 0.001) discard;
+        float dd = length(gl_PointCoord - 0.5);
+        if (dd > 0.5) discard;
+        float core = smoothstep(0.5, 0.0, dd);   // soft disc with a bright centre
+        vec3 col = vCat < 0.5 ? uC0 : vCat < 1.5 ? uC1 : vCat < 2.5 ? uC2 : vCat < 3.5 ? uC3 : vCat < 4.5 ? uC4 : uC5;
+        gl_FragColor = vec4(col * (0.35 + core * 1.7), core * vVis * uOpacity);
+      }
+    `,
+  });
+
+  const mesh = new THREE.Points(geo, mat);
+  mesh.visible = settings[cfg.keys.visible];
+  mesh.frustumCulled = false;
+  mesh.renderOrder = cfg.renderOrder;
+  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys });
+}
+
+// Arc layer (Citi Bike): same instanced fat-line technique as trip flows, generalised.
+// config: origin/dest/hour accessors, two ramp colours, arch shape, settings keys.
+function buildArcLayer(rows, config) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const cfg = {
+    extentFactor: 0.92, archBase: FLOW_ARCH_BASE, archRate: FLOW_ARCH_RATE,
+    archMax: FLOW_ARCH_MAX, minDist: 3, renderOrder: 3, ...config,
+  };
+
+  const extentX = groundSpanX * cfg.extentFactor;
+  const extentZ = groundSpanZ * cfg.extentFactor;
+  const trips = [];
+  for (const r of rows) {
+    const oLon = cfg.originLon(r), oLat = cfg.originLat(r);
+    const dLon = cfg.destLon(r), dLat = cfg.destLat(r);
+    if (![oLon, oLat, dLon, dLat].every(Number.isFinite)) continue;
+    const hour = cfg.hour(r);
+    if (!(hour >= 0 && hour < 24)) continue;
+    const p = toLocal(oLon, oLat);
+    const d = toLocal(dLon, dLat);
+    if (Math.abs(p.x) > extentX || Math.abs(p.z) > extentZ) continue;
+    if (Math.abs(d.x) > extentX || Math.abs(d.z) > extentZ) continue;
+    const dist = Math.hypot(d.x - p.x, d.z - p.z);
+    if (dist < cfg.minDist) continue;
+    trips.push({ p, d, dist, hour });
+  }
+  if (trips.length === 0) return null;
+
+  let picked = trips;
+  if (trips.length > FLOW_MAX) {
+    picked = [];
+    const stride = trips.length / FLOW_MAX;
+    for (let i = 0; i < FLOW_MAX; i += 1) picked.push(trips[Math.floor(i * stride)]);
+  }
+
+  const segCount = picked.length * FLOW_SEGMENTS;
+  const positions = new Float32Array(segCount * 6);
+  const aHour = new Float32Array(segCount);
+  const aSeed = new Float32Array(segCount);
+  const aT0 = new Float32Array(segCount);
+  const aT1 = new Float32Array(segCount);
+  let seg = 0;
+
+  for (const t of picked) {
+    const seed = Math.random();
+    const mx = (t.p.x + t.d.x) / 2;
+    const mz = (t.p.z + t.d.z) / 2;
+    const ctrlY = 0.3 + Math.min(cfg.archMax, cfg.archBase + t.dist * cfg.archRate);
+    const px = new Array(FLOW_SEGMENTS + 1);
+    const py = new Array(FLOW_SEGMENTS + 1);
+    const pz = new Array(FLOW_SEGMENTS + 1);
+    for (let s = 0; s <= FLOW_SEGMENTS; s += 1) {
+      const u = s / FLOW_SEGMENTS;
+      const omu = 1 - u;
+      px[s] = omu * omu * t.p.x + 2 * omu * u * mx + u * u * t.d.x;
+      py[s] = omu * omu * 0.3 + 2 * omu * u * ctrlY + u * u * 0.3;
+      pz[s] = omu * omu * t.p.z + 2 * omu * u * mz + u * u * t.d.z;
+    }
+    for (let s = 0; s < FLOW_SEGMENTS; s += 1) {
+      const o = seg * 6;
+      positions[o] = px[s]; positions[o + 1] = py[s]; positions[o + 2] = pz[s];
+      positions[o + 3] = px[s + 1]; positions[o + 4] = py[s + 1]; positions[o + 5] = pz[s + 1];
+      aHour[seg] = t.hour;
+      aSeed[seg] = seed;
+      aT0[seg] = s / FLOW_SEGMENTS;
+      aT1[seg] = (s + 1) / FLOW_SEGMENTS;
+      seg += 1;
+    }
+  }
+
+  const geo = new LineSegmentsGeometry();
+  geo.setPositions(positions);
+  geo.setAttribute('aHour', new THREE.InstancedBufferAttribute(aHour, 1));
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(aSeed, 1));
+  geo.setAttribute('aT0', new THREE.InstancedBufferAttribute(aT0, 1));
+  geo.setAttribute('aT1', new THREE.InstancedBufferAttribute(aT1, 1));
+
+  const mat = new LineMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    worldUnits: false, linewidth: settings[cfg.keys.width],
+  });
+  mat.resolution.set(window.innerWidth, window.innerHeight);
+  Object.assign(mat.uniforms, {
+    uHour: { value: 12 },
+    uWindow: { value: settings[cfg.keys.window] },
+    uTime: { value: 0 },
+    uFlowOpacity: { value: settings[cfg.keys.opacity] },
+    uColorA: { value: new THREE.Color(cfg.colorA) },
+    uColorB: { value: new THREE.Color(cfg.colorB) },
+  });
+  mat.vertexShader = mat.vertexShader.replace('void main() {', /* glsl */`
+    attribute float aHour;
+    attribute float aSeed;
+    attribute float aT0;
+    attribute float aT1;
+    varying float vHour;
+    varying float vSeed;
+    varying float vArc;
+    void main() {
+      vHour = aHour;
+      vSeed = aSeed;
+      vArc = ( position.y < 0.5 ) ? aT0 : aT1;
+  `);
+  mat.fragmentShader = mat.fragmentShader
+    .replace('void main() {', /* glsl */`
+      uniform float uHour;
+      uniform float uWindow;
+      uniform float uTime;
+      uniform float uFlowOpacity;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      varying float vHour;
+      varying float vSeed;
+      varying float vArc;
+      void main() {
+    `)
+    .replace('vec4 diffuseColor = vec4( diffuse, alpha );', /* glsl */`
+      float _hd = abs( vHour - uHour );
+      _hd = min( _hd, 24.0 - _hd );
+      float _vis = smoothstep( uWindow, 0.0, _hd );
+      if ( _vis <= 0.001 ) discard;
+      float _head = fract( uTime * 0.22 + vSeed );
+      float _pulse = smoothstep( 0.14, 0.0, abs( vArc - _head ) );
+      vec3 _col = mix( uColorA, uColorB, vArc ) * ( 0.35 + _pulse * 1.7 );
+      alpha *= _vis * uFlowOpacity * ( 0.45 + _pulse );
+      vec4 diffuseColor = vec4( _col, alpha );
+    `);
+  mat.needsUpdate = true;
+
+  const mesh = new LineSegments2(geo, mat);
+  mesh.visible = settings[cfg.keys.visible];
+  mesh.frustumCulled = false;
+  mesh.renderOrder = cfg.renderOrder;
+  return registerOverlay({ mesh, material: mat, kind: 'arc', keys: cfg.keys });
+}
+
+// Collisions: Motor Vehicle Collisions, coloured by severity.
+function buildCollisions(rows) {
+  return buildPointLayer(rows, {
+    lon: (r) => parseFloat(r.longitude),
+    lat: (r) => parseFloat(r.latitude),
+    hour: (r) => parseInt((r.crash_time || '').split(':')[0], 10),
+    category: (r) => (+r.number_of_persons_killed > 0 ? 0 : (+r.number_of_persons_injured > 0 ? 1 : 2)),
+    colors: ['#ff2e2e', '#ff9d2e', '#5b8cff'], // fatal · injury · property-only
+    keys: { visible: 'collisions', size: 'collisionSize', window: 'collisionWindow', opacity: 'collisionOpacity' },
+  });
+}
+
+// Crime: NYPD complaints, coloured by legal class.
+function buildCrime(rows) {
+  return buildPointLayer(rows, {
+    lon: (r) => parseFloat(r.longitude),
+    lat: (r) => parseFloat(r.latitude),
+    hour: (r) => parseInt((r.cmplnt_fr_tm || '').split(':')[0], 10),
+    category: (r) => (r.law_cat_cd === 'FELONY' ? 0 : (r.law_cat_cd === 'MISDEMEANOR' ? 1 : 2)),
+    colors: ['#ff2e6a', '#ffb020', '#37d0ff'], // felony · misdemeanour · violation
+    keys: { visible: 'crime', size: 'crimeSize', window: 'crimeWindow', opacity: 'crimeOpacity' },
+  });
+}
+
+// Citi Bike: a second light-trail fleet, not an arc layer. Build its demand from the
+// real start→drop-off rides, fill the bike pool, and set the active count for the hour.
+// The bike heat layers were built with the road network; the sim runs in animate.
+function buildCitibike(rows) {
+  bikeDemand = buildBikeDemand(rows);
+  if (!bikeDemand) return;
+  spawnBikes();
+  setBikeFleet(targetBikeFleet());
+  bikeFleetHour = currentHour();
 }
 
 // ---------------------------------------------------------------------------
@@ -3451,6 +4048,18 @@ async function init() {
   } catch (error) {
     console.warn('Events overlay unavailable:', error);
   }
+  // Extra datasets on the reusable factories — each independent and non-fatal.
+  for (const [name, build] of [
+    ['collisions', buildCollisions],
+    ['crime', buildCrime],
+    ['citibike', buildCitibike],
+  ]) {
+    try {
+      build(await loadSnapshot(SNAPSHOT_FILES[name]));
+    } catch (error) {
+      console.warn(`${name} overlay unavailable:`, error);
+    }
+  }
 
   setLoadingState(90, 'Dispatching taxis…');
   await nextFrame();
@@ -3577,6 +4186,11 @@ function animate() {
   if (taxis.length > 0) {
     updateTaxis(dt);
     decayHeat(dt);
+  }
+  // The bike fleet only runs while its layer is shown — no cost when it's off.
+  if (settings.citibike && bikes.length > 0) {
+    updateBikes(dt);
+    decayBikeHeat(dt);
   }
   updateHeatmap(dt);
   updateOverlays(dt);
@@ -3757,6 +4371,9 @@ window.addEventListener('resize', () => {
   // nothing — the camera projection alone takes care of them.
   // Fat flow-lines size themselves in pixels, so they need the new drawing-buffer size.
   if (flowsMat) flowsMat.resolution.set(window.innerWidth, window.innerHeight);
+  for (const layer of overlayLayers) {
+    if (layer.kind === 'arc') layer.material.resolution.set(window.innerWidth, window.innerHeight);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -3765,6 +4382,10 @@ window.addEventListener('resize', () => {
 
 function applySetting(key, value) {
   settings[key] = value;
+
+  // Registry-backed overlays (collisions, crime, Citi Bike) toggle by their visible key.
+  const overlay = overlayLayers.find((l) => l.keys.visible === key);
+  if (overlay) overlay.mesh.visible = value;
 
   switch (key) {
     case 'exposure':
@@ -3787,6 +4408,22 @@ function applySetting(key, value) {
     case 'trailOpacity':
       trailUniforms.opacity.value = value;
       break;
+    case 'taxisVisible':
+      // Hide/show the glowing trail meshes; the dim road network (roadLines) stays.
+      for (const layer of roadLayers) if (layer) layer.mesh.visible = value;
+      break;
+    case 'citibike':
+      // Show/hide the bike trail meshes. The sim in animate is gated on this too.
+      for (const layer of bikeLayers) if (layer) layer.mesh.visible = value;
+      break;
+    case 'citibikeHead':
+    case 'citibikeTail':
+      applyTrailGradient(key, value);
+      break;
+    case 'citibikeOpacity':
+      bikeTrailUniforms.opacity.value = value;
+      break;
+    // citibikeDecay is read fresh every frame by decayBikeHeat — nothing to apply.
     case 'timeOfDay':
       // Scrubbing the slider is a manual override — drop out of live mode so the next
       // clock tick doesn't yank the time back to now, and reflect that in the toggle.
@@ -4352,6 +4989,45 @@ const SECTION_INFO = {
       <p class="info-controls"><strong>Sensitivity</strong> — how much traffic a block
       needs before it reads as fully hot: raise it to make the map cooler and pick out
       only the busiest streets, lower it to light the city up sooner.</p>`,
+  },
+  collisions: {
+    title: 'Collisions',
+    body: `
+      <p>Every point is a real <strong>motor-vehicle collision</strong> reported to NYPD,
+      placed where it happened. Colour is severity: <strong>red</strong> a death,
+      <strong>orange</strong> someone injured, <strong>blue</strong> property damage only.</p>
+      <p>A year of crashes is aggregated <strong>by time of day</strong>: each shows at the
+      hour it occurred, so the Time-of-day slider reveals when — and where — the roads turn
+      dangerous. Quiet overnight, dense through the afternoon and evening rush.</p>
+      <p class="info-controls"><strong>Size</strong> — how big each point glows.
+      <strong>Hour spread</strong> — how many hours of crashes show at once.
+      <strong>Opacity</strong> — fades the whole layer.</p>`,
+  },
+  crime: {
+    title: 'Crime',
+    body: `
+      <p>Each point is a <strong>crime complaint</strong> filed with NYPD, placed at the
+      reported location. Colour is the legal class: <strong>pink</strong> felony,
+      <strong>amber</strong> misdemeanour, <strong>cyan</strong> violation.</p>
+      <p>A month of complaints is aggregated <strong>by time of day</strong>, so scrubbing
+      the Time-of-day slider replays when offences cluster across the map.</p>
+      <p class="info-controls"><strong>Size</strong> — how big each point glows.
+      <strong>Hour spread</strong> — how many hours of reports show at once.
+      <strong>Opacity</strong> — fades the whole layer.</p>`,
+  },
+  citibike: {
+    title: 'Citi Bike',
+    body: `
+      <p>A second fleet of <strong>light trails</strong>, just like the taxis but for bikes.
+      Each bike spawns at a real Citi Bike <strong>start station</strong> and rides toward
+      that trip's real <strong>drop-off station</strong>, so the glowing trails pile up on
+      the corridors bikes actually use — the greenway, the protected avenues.</p>
+      <p>The fleet size follows Citi Bike's real hourly volume, so the <strong>Time of
+      day</strong> slider swells it through the morning and evening commutes. Bikes ride
+      noticeably slower than the cabs.</p>
+      <p class="info-controls"><strong>Head</strong> / <strong>Tail</strong> — the trail's
+      hot tip and cooling body colours. <strong>Decay</strong> — how long trails linger
+      (Long = a fuller long-exposure). <strong>Opacity</strong> — fades the whole fleet.</p>`,
   },
 };
 
