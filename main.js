@@ -107,6 +107,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(DEFAULT_THEME.background);
 scene.fog = new THREE.FogExp2(DEFAULT_THEME.background, 0.0011);
 
+// Distance-fog "haze": the Haze slider scales this density (0.5 ≈ the original 0.0011),
+// and — because FogExp2 thickens with camera distance — the optional thin-with-zoom fade
+// eases it off as the camera pulls back, so a zoomed-out overview stays crisp.
+const HAZE_MAX_DENSITY = 0.0022;
+const HAZE_FADE_NEAR = 320;  // world units: full haze at/under this camera distance…
+const HAZE_FADE_FAR = 1050;  // …thinning to HAZE_FADE_MIN by here
+const HAZE_FADE_MIN = 0.22;
+
 const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 4000);
 camera.position.set(-130, 88, 175);
 
@@ -166,6 +174,11 @@ const view = {
 // right handler and the right panel. Derived from `view` so a new camera setting
 // is themeable the moment it's added there.
 const VIEW_KEYS = new Set(Object.keys(view));
+
+// The keys whose only effect is a CSS custom property on the panel chrome. Unlike
+// the scene settings, nothing reads these back out of `settings` while rendering,
+// so setupControls has to apply them explicitly on load.
+const UI_STYLE_KEYS = ['uiAccent', 'uiPanel', 'uiButton'];
 
 // Assigned by setupCamera once its panel exists. applyTheme can push camera values
 // into `view` before that (nothing breaks — the sliders just sync when set up), so
@@ -385,6 +398,10 @@ const settings = {
   fogOpacity: 0.28,
   fogStrength: 0.06,
   fogNoise: 0.67,
+  // Distance-fog haze (Environment). Strength scales the FogExp2 density; hazeFade thins
+  // it as the camera zooms out so overviews stay clear. View prefs, not themed.
+  hazeStrength: 0.5,
+  hazeFade: true,
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -1009,7 +1026,9 @@ groundMaterial.onBeforeCompile = (shader) => {
       #include <fog_fragment>
       #ifdef USE_FOG
         vec2 groundEdge = min(vWaterUv, 1.0 - vWaterUv); // 0 at the rim, 0.5 at centre
-        float groundInfinite = smoothstep(0.0, 0.28, min(groundEdge.x, groundEdge.y));
+        // A thin feather at the very rim (outer ~7%) so the plane's hard edge just softens
+        // into the sky, rather than a wide gradient washing halfway across the map.
+        float groundInfinite = smoothstep(0.0, 0.07, min(groundEdge.x, groundEdge.y));
         gl_FragColor.rgb = mix(fogColor, gl_FragColor.rgb, groundInfinite);
       #endif
       // Ground sits at the street, so it's always in the mist (worldY 0 → full height factor).
@@ -4363,6 +4382,19 @@ function startFlyover() {
   }, 4000);
 }
 
+// Set the distance-fog density from the Haze slider, easing it off with camera distance
+// when the thin-with-zoom option is on so zoomed-out overviews don't wash to the sky.
+function updateHaze() {
+  const base = settings.hazeStrength * HAZE_MAX_DENSITY;
+  if (settings.hazeFade) {
+    const d = camera.position.distanceTo(controls.target);
+    const t = Math.min(1, Math.max(0, (d - HAZE_FADE_NEAR) / (HAZE_FADE_FAR - HAZE_FADE_NEAR)));
+    scene.fog.density = base * (1 - t * (1 - HAZE_FADE_MIN));
+  } else {
+    scene.fog.density = base;
+  }
+}
+
 const clock = new THREE.Clock();
 
 function animate() {
@@ -4375,6 +4407,7 @@ function animate() {
 
   waterUniforms.uWaterTime.value += dt;
   if (settings.fog) fogUniforms.uFogTime.value += dt;
+  updateHaze();
 
   // After controls.update(), so the focus plane tracks the damped camera rather
   // than lagging a frame behind it during a drag.
@@ -5020,6 +5053,11 @@ function setupControls() {
   const panel = document.querySelector('#panel');
   const themeRow = panel.querySelector('.themes');
   const { syncInputs } = wirePanel(panel, settings, applySetting);
+
+  // The scene reads `settings` as it builds, but the panel chrome only changes when
+  // applySetting writes the CSS properties — which nothing does on a cold load. Push
+  // them once here so the stylesheet's starting values can't outlive the theme file.
+  for (const key of UI_STYLE_KEYS) applySetting(key, settings[key]);
 
   const syncAll = () => {
     syncInputs();

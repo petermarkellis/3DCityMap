@@ -18,7 +18,7 @@ export default {
   uiButton: '#3dffa0',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 0.90, contrast: 1.15, bloom: 0.75,
+  exposure: 1.20, contrast: 1.15, bloom: 0.75,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
@@ -28,7 +28,7 @@ export default {
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#aadac3', envIntensity: 1.5,
-  background: '#30403a', groundColor: '#45594e',
+  background: '#464e4b', groundColor: '#45594e',
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
   waterTint: '#1fb08a', waterTintStrength: 0.0,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
@@ -45,10 +45,10 @@ export default {
   buildingRoughness: 0.72, buildingMetalness: 0.15,
   buildingSpecular: 1.00, buildingDiffuse: 1.00,
   buildingSheen: 0.40, buildingGrain: 0.35, buildingVariation: 0.35,
-  buildingColor: '#304137', edgeColor: '#526f5f', showEdges: true,
+  buildingColor: '#51675a', edgeColor: '#526f5f', showEdges: true,
   // A dim green sheen so the clay sits in the phosphor glow.
   buildingSheenColor: '#16342a',
-  variationColorA: '#1e4b33', variationColorB: '#203328', variationColorC: '#0f291a',
+  variationColorA: '#1e4b33', variationColorB: '#addbc1', variationColorC: '#768f80',
 
   // Camera — how the view moves (the right-hand Camera panel). Speeds and damping
   // are the Motion controls; autoOrbit is the Auto-orbit drift. Drag mode stays a

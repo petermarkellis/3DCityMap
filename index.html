@@ -1489,6 +1489,14 @@
             <span>Sky colour</span>
             <input type="color" data-setting="background" value="#04050a" />
           </label>
+          <label>
+            <span>Haze<em data-value="hazeStrength"></em></span>
+            <input type="range" data-setting="hazeStrength" min="0" max="1" step="0.01" value="0.5" />
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="hazeFade" checked />
+            <span>Thin haze when zoomed out</span>
+          </label>
           <div class="group-divider"></div>
           <label class="swatch">
             <span>Water tint</span>
@@ -1546,7 +1554,7 @@
             <input type="range" data-setting="buildingOpacity" min="0" max="1" step="0.01" value="1" />
           </label>
           <label class="swatch">
-            <span>Colour</span>
+            <span>Base colour</span>
             <input type="color" data-setting="buildingColor" value="#16181e" />
           </label>
           <label class="check">

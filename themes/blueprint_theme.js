@@ -19,7 +19,7 @@ export default {
   uiButton: '#5b93e6',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 0.95, contrast: 1.15, bloom: 0.25,
+  exposure: 1.35, contrast: 1.15, bloom: 0.25,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.

@@ -12,12 +12,12 @@ export default {
 
   // UI styling — the control-panel chrome. uiAccent tints most of it (sliders, checks,
   // text, borders, glow); uiPanel is the panel/card base colour; uiButton is the button fill.
-  uiAccent: '#ff8c2a',
+  uiAccent: '#d19866',
   uiPanel: '#090a0c',
-  uiButton: '#ff8c2a',
+  uiButton: '#a67a53',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 0.69, contrast: 1.00, bloom: 0.55,
+  exposure: 1.11, contrast: 1.00, bloom: 0.55,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
@@ -30,9 +30,9 @@ export default {
   // the water toward waterTint.
   envColor: '#fff6ef', envIntensity: 1.6,
   background: '#2b2e36', groundColor: '#50452b',
-  waterTint: '#2f6f7f', waterTintStrength: 0.0,
+  waterTint: '#2f6f7f', waterTintStrength: 0.09,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
-  fog: false, fogColor: '#ffffff', fogOpacity: 0.2, fogStrength: 0.03, fogNoise: 0.67,
+  fog: false, fogColor: '#ffffff', fogOpacity: 0.1, fogStrength: 0.03, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
