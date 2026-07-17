@@ -378,7 +378,7 @@ const settings = {
   crime: false,
   crimeSize: 90,
   crimeWindow: 1.2,
-  crimeOpacity: 0.85,
+  crimeOpacity: 0.5, // semi-transparent pyramids; the control fades them further or solid
   // Citi Bike is a second light-trail fleet (bikes riding real start→dropoff routes),
   // so it carries the same trail controls as the taxis rather than arc controls.
   citibike: false,
@@ -3931,6 +3931,124 @@ function buildPointLayer(rows, config) {
   return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys });
 }
 
+// One marker's geometry: a tall, narrow square-pyramid spike hanging point-DOWN — the
+// thin apex touches the street and it widens upward, long enough to clear the towers so
+// it reads from across the map. Rotated so the apex points at the floor, then baked so
+// that apex sits at the local origin, so the per-instance scale grows it upward from the
+// street rather than about its middle. The height-to-base ratio lives here (uniform
+// instance scale can't stretch one axis), so this is the knob for how needle-like it is.
+function makeMarkerGeometry() {
+  const height = 21; // ~8× the base footprint, so it stands well above the buildings
+  const geo = new THREE.ConeGeometry(1.2, height, 4); // 4 radial segments = square pyramid
+  geo.rotateX(Math.PI);            // flip apex down
+  geo.translate(0, height / 2, 0); // apex now at the local origin, base up
+  return geo;
+}
+
+// Crime markers. Same registry contract as the point layer (updateOverlays drives uHour /
+// uWindow / uSize / uOpacity, applySetting toggles by keys.visible), but rendered as
+// semi-transparent pastel pyramids instead of additive glow sprites. One instanced draw:
+// the pyramid geometry is shared, and per-marker position / hour / colour ride as
+// instanced attributes. No pulse, no bloom — presence alone, gated by the clock.
+function buildMarkerLayer(rows, config) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const cfg = { y: 0.5, renderOrder: 4, ...config };
+
+  const offsets = [];
+  const hours = [];
+  const colors = [];
+  const col = new THREE.Color();
+  for (const r of rows) {
+    const lon = cfg.lon(r);
+    const lat = cfg.lat(r);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const hour = cfg.hour(r);
+    if (!(hour >= 0 && hour < 24)) continue;
+    const l = toLocal(lon, lat);
+    offsets.push(l.x, cfg.y, l.z);
+    hours.push(hour);
+    const cat = cfg.category(r);
+    col.set(cfg.colors[Math.min(cat, cfg.colors.length - 1)]);
+    colors.push(col.r, col.g, col.b);
+  }
+  const count = hours.length;
+  if (count === 0) return null;
+
+  const base = makeMarkerGeometry();
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.index = base.index;
+  geo.setAttribute('position', base.getAttribute('position'));
+  geo.setAttribute('normal', base.getAttribute('normal'));
+  geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(new Float32Array(offsets), 3));
+  geo.setAttribute('aHour', new THREE.InstancedBufferAttribute(new Float32Array(hours), 1));
+  geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(new Float32Array(colors), 3));
+  geo.instanceCount = count;
+
+  const mat = new THREE.ShaderMaterial({
+    // Semi-transparent, so depth-write is off (they blend through one another) but
+    // depth-test stays on (buildings still occlude them). uOpacity is the blend alpha.
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uHour: { value: 12 },
+      uWindow: { value: settings[cfg.keys.window] },
+      uTime: { value: 0 }, // set by updateOverlays but unused — these don't animate
+      uSize: { value: settings[cfg.keys.size] },
+      uOpacity: { value: settings[cfg.keys.opacity] },
+    },
+    vertexShader: /* glsl */`
+      attribute vec3 aOffset;
+      attribute float aHour;
+      attribute vec3 aColor;
+      uniform float uHour, uWindow, uSize;
+      varying vec3 vColor;
+      varying float vVis;
+      varying vec3 vNormalV;
+      void main() {
+        float d = abs(aHour - uHour);
+        d = min(d, 24.0 - d);
+        vVis = smoothstep(uWindow, 0.0, d);
+        vColor = aColor;
+        // Out-of-window markers scale to nothing, so scrubbing the clock grows them in
+        // from the street at their hour.
+        float s = uSize * 0.02 * (0.0001 + vVis);
+        vNormalV = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position * s + aOffset, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision mediump float;
+      uniform float uOpacity;
+      varying vec3 vColor;
+      varying float vVis;
+      varying vec3 vNormalV;
+      void main() {
+        if (vVis <= 0.002) discard;
+        // Soft matte shading off a fixed key — enough to face the pyramid's sides
+        // differently, nothing that reads as glow.
+        vec3 L = normalize(vec3(0.35, 0.75, 0.55));
+        float diff = max(0.0, dot(normalize(vNormalV), L));
+        vec3 c = vColor * (0.5 + 0.5 * diff);
+        // The bloom pass glows anything past its 0.45 threshold, and pastels are bright
+        // enough to trip it (yellow especially) — which is exactly the glow we were asked
+        // to remove. Holding every pixel just under that line keeps them solid. The cap
+        // is on the pre-tone-map value; exposure still lifts them to a bright pastel on
+        // screen. Colour-agnostic on purpose, so a new pastel can't quietly start
+        // blooming.
+        float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > 0.44) c *= 0.44 / lum;
+        gl_FragColor = vec4(c, uOpacity * vVis);
+      }
+    `,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.visible = settings[cfg.keys.visible];
+  mesh.frustumCulled = false;
+  mesh.renderOrder = cfg.renderOrder;
+  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys });
+}
+
 // Arc layer (Citi Bike): same instanced fat-line technique as trip flows, generalised.
 // config: origin/dest/hour accessors, two ramp colours, arch shape, settings keys.
 function buildArcLayer(rows, config) {
@@ -4079,14 +4197,16 @@ function buildCollisions(rows) {
   });
 }
 
-// Crime: NYPD complaints, coloured by legal class.
+// Crime: NYPD complaints, coloured by legal class. Rendered as semi-transparent pastel
+// pyramids (buildMarkerLayer) rather than glow points — the legal class still drives the
+// colour, now as a soft pink / yellow / blue instead of the hot pink / amber / cyan.
 function buildCrime(rows) {
-  return buildPointLayer(rows, {
+  return buildMarkerLayer(rows, {
     lon: (r) => parseFloat(r.longitude),
     lat: (r) => parseFloat(r.latitude),
     hour: (r) => parseInt((r.cmplnt_fr_tm || '').split(':')[0], 10),
     category: (r) => (r.law_cat_cd === 'FELONY' ? 0 : (r.law_cat_cd === 'MISDEMEANOR' ? 1 : 2)),
-    colors: ['#ff2e6a', '#ffb020', '#37d0ff'], // felony · misdemeanour · violation
+    colors: ['#f4a6c0', '#f2e0a0', '#a9c9f2'], // felony · misdemeanour · violation, pastel
     keys: { visible: 'crime', size: 'crimeSize', window: 'crimeWindow', opacity: 'crimeOpacity' },
   });
 }
@@ -5293,12 +5413,12 @@ const SECTION_INFO = {
   crime: {
     title: 'Crime',
     body: `
-      <p>Each point is a <strong>crime complaint</strong> filed with NYPD, placed at the
-      reported location. Colour is the legal class: <strong>pink</strong> felony,
-      <strong>amber</strong> misdemeanour, <strong>cyan</strong> violation.</p>
+      <p>Each marker is a <strong>crime complaint</strong> filed with NYPD, placed at the
+      reported location. Colour is the legal class: <strong>soft pink</strong> felony,
+      <strong>soft yellow</strong> misdemeanour, <strong>soft blue</strong> violation.</p>
       <p>A month of complaints is aggregated <strong>by time of day</strong>, so scrubbing
       the Time-of-day slider replays when offences cluster across the map.</p>
-      <p class="info-controls"><strong>Size</strong> — how big each point glows.
+      <p class="info-controls"><strong>Size</strong> — how big each marker is.
       <strong>Hour spread</strong> — how many hours of reports show at once.
       <strong>Opacity</strong> — fades the whole layer.</p>`,
   },
