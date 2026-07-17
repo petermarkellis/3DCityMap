@@ -558,6 +558,9 @@
         display: flex;
         flex-direction: column;
         gap: 9px;
+        /* A small inset on each section so the header band and its controls sit just
+           off the panel's edges rather than running flush to them. */
+        padding: 0 6px;
       }
 
       .panel h2 {
@@ -577,10 +580,13 @@
            moving the text. */
         position: sticky;
         top: -1px;
-        padding-top: 1px;
+        /* 1px of side padding nudges the title and its buttons in off the band edges;
+           top stays 1px for the sticky seam (see below). */
+        padding: 1px 1px 0;
         z-index: 2;
         background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
         backdrop-filter: blur(14px);
+        border-radius: 4px;
       }
 
       .panel .section-toggle {
@@ -589,7 +595,9 @@
         justify-content: space-between;
         flex: 1;
         min-width: 0;
-        padding: 0 0 6px;
+        /* Equal top/bottom padding so the label sits centred in the frosted band rather
+           than riding its top edge. */
+        padding: 6px 0;
         border: 0;
         border-bottom: 1px solid var(--edge-soft);
         background: none;
@@ -618,7 +626,7 @@
         align-items: center;
         flex: 0 0 auto;
         margin-left: 8px;
-        padding: 0 0 6px;
+        padding: 6px 0;
         border: 0;
         border-bottom: 1px solid var(--edge-soft);
         background: none;
@@ -633,7 +641,7 @@
         align-items: center;
         flex: 0 0 auto;
         margin-left: 8px;
-        padding: 0 0 6px;
+        padding: 6px 0;
         border: 0;
         border-bottom: 1px solid var(--edge-soft);
         background: none;
@@ -976,14 +984,15 @@
       }
 
       /* Actions (Save / Export / Import) are dashed and centred, marking them apart
-         from the preset buttons. Save spans the row; Export and Import share one. */
+         from the preset buttons. Save and Import share the top row; Export, when it
+         exists, spans its own row below. */
       .panel .themes .theme-save,
       .panel .themes .theme-io {
         justify-content: center;
         border-style: dashed;
       }
 
-      .panel .themes .theme-save {
+      .panel .themes .theme-export {
         grid-column: 1 / -1;
       }
 

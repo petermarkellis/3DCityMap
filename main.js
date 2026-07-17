@@ -5689,17 +5689,9 @@ function setupControls() {
     save.addEventListener('click', () => openSaveDialog());
     themeRow.append(save);
 
-    // Export only makes sense once there's something saved; Import is always offered.
-    if (customThemes.length > 0) {
-      const exportButton = document.createElement('button');
-      exportButton.type = 'button';
-      exportButton.className = 'theme-io';
-      exportButton.textContent = 'Export';
-      exportButton.title = 'Download your saved themes as a .json file';
-      exportButton.addEventListener('click', exportThemes);
-      themeRow.append(exportButton);
-    }
-
+    // Save and Import share the top action row (each half-width); Export, which only
+    // exists once something has been saved, gets its own full-width row below — so it's
+    // appended after Import even though it reads before it.
     const importButton = document.createElement('button');
     importButton.type = 'button';
     importButton.className = 'theme-io';
@@ -5727,6 +5719,16 @@ function setupControls() {
       input.click();
     });
     themeRow.append(importButton);
+
+    if (customThemes.length > 0) {
+      const exportButton = document.createElement('button');
+      exportButton.type = 'button';
+      exportButton.className = 'theme-io theme-export';
+      exportButton.textContent = 'Export';
+      exportButton.title = 'Download your saved themes as a .json file';
+      exportButton.addEventListener('click', exportThemes);
+      themeRow.append(exportButton);
+    }
 
     syncAll();
   };
