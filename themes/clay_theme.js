@@ -17,7 +17,7 @@ export default {
   uiButton: '#a67a53',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 1.51, contrast: 1.50, bloom: 0.12,
+  exposure: 1.3, contrast: 1.50, bloom: 0.12,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
@@ -101,9 +101,9 @@ export default {
       // The sky half stays a cool violet — that opposition to the warm key is what
       // makes it read as low evening sun rather than a global orange wash.
       skyLight: '#46425f', groundLight: '#69543e',
-      background: '#937347',
+      background: '#936547',
       groundColor: '#4a4030',
-      envColor: '#e3bb98', envIntensity: 1.12,
+      envColor: '#e1a6c1', envIntensity: 1.12,
       // Barely off the day value: the facades should be *lit* warm, not *painted* warm.
       buildingColor: '#454039',
     },
