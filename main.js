@@ -379,10 +379,18 @@ const settings = {
   collisionSize: 120,
   collisionWindow: 1.4,
   collisionOpacity: 0.9,
+  // Per-severity toggles — the shader drops a category's points when its box is off.
+  collisionFatal: true,
+  collisionInjury: true,
+  collisionProperty: true,
   crime: false,
   crimeSize: 90,
   crimeWindow: 1.2,
   crimeOpacity: 0.5, // semi-transparent pyramids; the control fades them further or solid
+  // Per-legal-class toggles, same as collisions.
+  crimeFelony: true,
+  crimeMisdemeanour: true,
+  crimeViolation: true,
   // Citi Bike is a second light-trail fleet (bikes riding real start→dropoff routes),
   // so it carries the same trail controls as the taxis rather than arc controls.
   citibike: false,
@@ -3865,6 +3873,25 @@ function registerOverlay(layer) {
   return layer;
 }
 
+// Per-category on/off, for the checkboxes that let a layer show only some of its classes
+// (crime by legal class, collisions by severity). Six enable uniforms — a ternary chain
+// reads the instance's category, GLSL1-safe exactly like the colour pick — default on, or
+// seeded from a settings key when the config names one per category. applySetting flips
+// the matching uEn when its checkbox toggles (see the category toggle there).
+function categoryEnableUniforms(cfg) {
+  const u = {};
+  for (let i = 0; i < 6; i += 1) {
+    const key = cfg.categoryKeys && cfg.categoryKeys[i];
+    u[`uE${i}`] = { value: !key || settings[key] ? 1 : 0 };
+  }
+  return u;
+}
+const CATEGORY_UNIFORM_DECL = 'uniform float uE0, uE1, uE2, uE3, uE4, uE5;';
+const CATEGORY_GATE_GLSL = /* glsl */`
+        float en = vCat < 0.5 ? uE0 : vCat < 1.5 ? uE1 : vCat < 2.5 ? uE2
+          : vCat < 3.5 ? uE3 : vCat < 4.5 ? uE4 : uE5;
+        if (en < 0.5) discard;`;
+
 // Point layer (311, collisions, crime): glowing category-coloured points that surface
 // at their hour. config: lon/lat/hour/category accessors, a colours array, settings keys.
 function buildPointLayer(rows, config) {
@@ -3912,6 +3939,7 @@ function buildPointLayer(rows, config) {
       uOpacity: { value: settings[cfg.keys.opacity] },
       uC0: { value: c[0] }, uC1: { value: c[1] }, uC2: { value: c[2] },
       uC3: { value: c[3] }, uC4: { value: c[4] }, uC5: { value: c[5] },
+      ...categoryEnableUniforms(cfg),
     },
     vertexShader: /* glsl */`
       attribute float aHour;
@@ -3935,10 +3963,12 @@ function buildPointLayer(rows, config) {
       precision mediump float;
       uniform float uOpacity;
       uniform vec3 uC0, uC1, uC2, uC3, uC4, uC5;
+      ${CATEGORY_UNIFORM_DECL}
       varying float vCat;
       varying float vVis;
       void main() {
         if (vVis <= 0.001) discard;
+        ${CATEGORY_GATE_GLSL}
         float dd = length(gl_PointCoord - 0.5);
         if (dd > 0.5) discard;
         float core = smoothstep(0.5, 0.0, dd);   // soft disc with a bright centre
@@ -3952,7 +3982,7 @@ function buildPointLayer(rows, config) {
   mesh.visible = settings[cfg.keys.visible];
   mesh.frustumCulled = false;
   mesh.renderOrder = cfg.renderOrder;
-  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys });
+  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
 // One marker's geometry: a tall, narrow square-pyramid spike hanging point-DOWN — the
@@ -3981,6 +4011,7 @@ function buildMarkerLayer(rows, config) {
   const offsets = [];
   const hours = [];
   const colors = [];
+  const cats = [];
   const col = new THREE.Color();
   for (const r of rows) {
     const lon = cfg.lon(r);
@@ -3992,6 +4023,7 @@ function buildMarkerLayer(rows, config) {
     offsets.push(l.x, cfg.y, l.z);
     hours.push(hour);
     const cat = cfg.category(r);
+    cats.push(cat);
     col.set(cfg.colors[Math.min(cat, cfg.colors.length - 1)]);
     colors.push(col.r, col.g, col.b);
   }
@@ -4006,6 +4038,7 @@ function buildMarkerLayer(rows, config) {
   geo.setAttribute('aOffset', new THREE.InstancedBufferAttribute(new Float32Array(offsets), 3));
   geo.setAttribute('aHour', new THREE.InstancedBufferAttribute(new Float32Array(hours), 1));
   geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(new Float32Array(colors), 3));
+  geo.setAttribute('aCat', new THREE.InstancedBufferAttribute(new Float32Array(cats), 1));
   geo.instanceCount = count;
 
   const mat = new THREE.ShaderMaterial({
@@ -4019,13 +4052,16 @@ function buildMarkerLayer(rows, config) {
       uTime: { value: 0 }, // set by updateOverlays but unused — these don't animate
       uSize: { value: settings[cfg.keys.size] },
       uOpacity: { value: settings[cfg.keys.opacity] },
+      ...categoryEnableUniforms(cfg),
     },
     vertexShader: /* glsl */`
       attribute vec3 aOffset;
       attribute float aHour;
       attribute vec3 aColor;
+      attribute float aCat;
       uniform float uHour, uWindow, uSize;
       varying vec3 vColor;
+      varying float vCat;
       varying float vVis;
       varying vec3 vNormalV;
       void main() {
@@ -4033,6 +4069,7 @@ function buildMarkerLayer(rows, config) {
         d = min(d, 24.0 - d);
         vVis = smoothstep(uWindow, 0.0, d);
         vColor = aColor;
+        vCat = aCat;
         // Out-of-window markers scale to nothing, so scrubbing the clock grows them in
         // from the street at their hour.
         float s = uSize * 0.02 * (0.0001 + vVis);
@@ -4043,11 +4080,14 @@ function buildMarkerLayer(rows, config) {
     fragmentShader: /* glsl */`
       precision mediump float;
       uniform float uOpacity;
+      ${CATEGORY_UNIFORM_DECL}
       varying vec3 vColor;
+      varying float vCat;
       varying float vVis;
       varying vec3 vNormalV;
       void main() {
         if (vVis <= 0.002) discard;
+        ${CATEGORY_GATE_GLSL}
         // Soft matte shading off a fixed key — enough to face the pyramid's sides
         // differently, nothing that reads as glow.
         vec3 L = normalize(vec3(0.35, 0.75, 0.55));
@@ -4070,7 +4110,7 @@ function buildMarkerLayer(rows, config) {
   mesh.visible = settings[cfg.keys.visible];
   mesh.frustumCulled = false;
   mesh.renderOrder = cfg.renderOrder;
-  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys });
+  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
 // Arc layer (Citi Bike): same instanced fat-line technique as trip flows, generalised.
@@ -4217,6 +4257,7 @@ function buildCollisions(rows) {
     hour: (r) => parseInt((r.crash_time || '').split(':')[0], 10),
     category: (r) => (+r.number_of_persons_killed > 0 ? 0 : (+r.number_of_persons_injured > 0 ? 1 : 2)),
     colors: ['#ff2e2e', '#ff9d2e', '#5b8cff'], // fatal · injury · property-only
+    categoryKeys: ['collisionFatal', 'collisionInjury', 'collisionProperty'],
     keys: { visible: 'collisions', size: 'collisionSize', window: 'collisionWindow', opacity: 'collisionOpacity' },
   });
 }
@@ -4231,6 +4272,7 @@ function buildCrime(rows) {
     hour: (r) => parseInt((r.cmplnt_fr_tm || '').split(':')[0], 10),
     category: (r) => (r.law_cat_cd === 'FELONY' ? 0 : (r.law_cat_cd === 'MISDEMEANOR' ? 1 : 2)),
     colors: ['#f4a6c0', '#f2e0a0', '#a9c9f2'], // felony · misdemeanour · violation, pastel
+    categoryKeys: ['crimeFelony', 'crimeMisdemeanour', 'crimeViolation'],
     keys: { visible: 'crime', size: 'crimeSize', window: 'crimeWindow', opacity: 'crimeOpacity' },
   });
 }
@@ -4765,6 +4807,12 @@ function applySetting(key, value) {
   // Registry-backed overlays (collisions, crime, Citi Bike) toggle by their visible key.
   const overlay = overlayLayers.find((l) => l.keys.visible === key);
   if (overlay) overlay.mesh.visible = value;
+
+  // Per-category checkboxes (crime by class, collisions by severity) flip the matching
+  // enable uniform, and the shader discards that category's instances. Its position in
+  // catKeys is the uEn index the ternary gate reads.
+  const catLayer = overlayLayers.find((l) => l.catKeys && l.catKeys.includes(key));
+  if (catLayer) catLayer.material.uniforms[`uE${catLayer.catKeys.indexOf(key)}`].value = value ? 1 : 0;
 
   switch (key) {
     case 'exposure':
@@ -5798,8 +5846,15 @@ const SECTION_INFO = {
     title: 'Collisions',
     body: `
       <p>Every point is a real <strong>motor-vehicle collision</strong> reported to NYPD,
-      placed where it happened. Colour is severity: <strong>red</strong> a death,
-      <strong>orange</strong> someone injured, <strong>blue</strong> property damage only.</p>
+      placed where it happened. Colour is severity:</p>
+      <ul class="info-legend">
+        <li><span class="cat-term">Fatal</span><i class="cat-dot" style="--dot:#ff2e2e"></i>
+          — at least one person killed.</li>
+        <li><span class="cat-term">Injury</span><i class="cat-dot" style="--dot:#ff9d2e"></i>
+          — someone hurt but no death (driver, passenger, cyclist or pedestrian).</li>
+        <li><span class="cat-term">Property-only</span><i class="cat-dot" style="--dot:#5b8cff"></i>
+          — vehicle or property damage, no one injured.</li>
+      </ul>
       <p>A year of crashes is aggregated <strong>by time of day</strong>: each shows at the
       hour it occurred, so the Time-of-day slider reveals when — and where — the roads turn
       dangerous. Quiet overnight, dense through the afternoon and evening rush.</p>
@@ -5811,8 +5866,18 @@ const SECTION_INFO = {
     title: 'Crime',
     body: `
       <p>Each marker is a <strong>crime complaint</strong> filed with NYPD, placed at the
-      reported location. Colour is the legal class: <strong>soft pink</strong> felony,
-      <strong>soft yellow</strong> misdemeanour, <strong>soft blue</strong> violation.</p>
+      reported location. Colour is the legal class:</p>
+      <ul class="info-legend">
+        <li><span class="cat-term">Felony</span><i class="cat-dot" style="--dot:#f4a6c0"></i>
+          — the most serious crimes, punishable by more than a year in state prison
+          (murder, robbery, burglary, felony assault).</li>
+        <li><span class="cat-term">Misdemeanour</span><i class="cat-dot" style="--dot:#f2e0a0"></i>
+          — mid-level offences, up to a year in city jail (petit larceny, simple assault,
+          most drug possession).</li>
+        <li><span class="cat-term">Violation</span><i class="cat-dot" style="--dot:#a9c9f2"></i>
+          — the lowest tier, not a crime in the strict sense; up to 15 days
+          (disorderly conduct, harassment, trespass).</li>
+      </ul>
       <p>A month of complaints is aggregated <strong>by time of day</strong>, so scrubbing
       the Time-of-day slider replays when offences cluster across the map.</p>
       <p class="info-controls"><strong>Size</strong> — how big each marker is.
