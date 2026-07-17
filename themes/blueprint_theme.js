@@ -9,8 +9,14 @@ export default {
   // Theme — identity, plus the accent the whole control panel is tinted with.
   id: 'blueprint',
   label: 'Blueprint',
-  swatch: '#2f5fb0',
-  accent: '#5b93e6',
+  theme_dot_swatch: '#2f5fb0',
+  theme_dot_accent: '#5b93e6',
+
+  // UI styling — the control-panel chrome. uiAccent tints most of it; uiPanel is the
+  // panel/card base colour; uiButton is the button fill.
+  uiAccent: '#5b93e6',
+  uiPanel: '#090a0c',
+  uiButton: '#5b93e6',
 
   // Image — tone mapping and the post-process passes.
   exposure: 0.95, contrast: 1.15, bloom: 0.25,
@@ -28,6 +34,10 @@ export default {
   // again. A "correct" navy like #0c1a3a lands on near-black on screen.
   envColor: '#44587e', envIntensity: 1.8,
   background: '#466090', groundColor: '#7b889d',
+  // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
+  waterTint: '#3a6fd0', waterTintStrength: 0.0,
+  // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
+  fog: false, fogColor: '#eaf1ff', fogOpacity: 0.28, fogStrength: 0.06, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.

@@ -1,14 +1,20 @@
-// Orange burn — a filament heating up: sodium-orange trails over a warm-grey city.
+// Clay — warm sodium trails over a soft, warm-grey city.
 //
 // Every value below is one the control panel can also set live. The comments name
 // the panel SECTION each group belongs to, so the file reads top-to-bottom in the
 // same order as the controls on screen.
 export default {
-  // Theme — identity, plus the accent the whole control panel is tinted with.
-  id: 'ember',
+  // Theme identity — the two colours of the dot on this theme's button (fill + glow).
+  id: 'clay',
   label: 'Clay',
-  swatch: '#ff4d0a',
-  accent: '#ff8c2a',
+  theme_dot_swatch: '#ff4d0a',
+  theme_dot_accent: '#ff8c2a',
+
+  // UI styling — the control-panel chrome. uiAccent tints most of it (sliders, checks,
+  // text, borders, glow); uiPanel is the panel/card base colour; uiButton is the button fill.
+  uiAccent: '#ff8c2a',
+  uiPanel: '#090a0c',
+  uiButton: '#ff8c2a',
 
   // Image — tone mapping and the post-process passes.
   exposure: 0.69, contrast: 1.00, bloom: 0.55,
@@ -20,13 +26,18 @@ export default {
   trailDecay: 'long', trailOpacity: 0.82,
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
+  // waterTintStrength 0 leaves the river on its floor colour; raise it (0..1) to wash
+  // the water toward waterTint.
   envColor: '#fff6ef', envIntensity: 1.6,
   background: '#2b2e36', groundColor: '#50452b',
+  waterTint: '#2f6f7f', waterTintStrength: 0.0,
+  // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
+  fog: false, fogColor: '#ffffff', fogOpacity: 0.2, fogStrength: 0.03, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
-  sunColor: '#ffd0a0', sunIntensity: 2.48,
-  skyLight: '#394760', groundLight: '#4a2410',
+  sunColor: '#e1d6cb', sunIntensity: 2.48,
+  skyLight: '#3c4458', groundLight: '#4a2410',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.

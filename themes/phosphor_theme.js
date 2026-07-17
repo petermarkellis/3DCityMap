@@ -8,8 +8,14 @@ export default {
   // Theme — identity, plus the accent the whole control panel is tinted with.
   id: 'phosphor',
   label: 'Green CRT',
-  swatch: '#11d4ad',
-  accent: '#3dffa0',
+  theme_dot_swatch: '#11d4ad',
+  theme_dot_accent: '#3dffa0',
+
+  // UI styling — the control-panel chrome. uiAccent tints most of it; uiPanel is the
+  // panel/card base colour; uiButton is the button fill.
+  uiAccent: '#3dffa0',
+  uiPanel: '#090a0c',
+  uiButton: '#3dffa0',
 
   // Image — tone mapping and the post-process passes.
   exposure: 0.90, contrast: 1.15, bloom: 0.75,
@@ -23,6 +29,10 @@ export default {
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#aadac3', envIntensity: 1.5,
   background: '#30403a', groundColor: '#45594e',
+  // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
+  waterTint: '#1fb08a', waterTintStrength: 0.0,
+  // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
+  fog: false, fogColor: '#e6fff2', fogOpacity: 0.28, fogStrength: 0.06, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.

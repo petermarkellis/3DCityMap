@@ -7,8 +7,14 @@ export default {
   // Theme — identity, plus the accent the whole control panel is tinted with.
   id: 'grayscale',
   label: 'Grayscale',
-  swatch: '#7d848d',
-  accent: '#c9ced6',
+  theme_dot_swatch: '#7d848d',
+  theme_dot_accent: '#c9ced6',
+
+  // UI styling — the control-panel chrome. uiAccent tints most of it; uiPanel is the
+  // panel/card base colour; uiButton is the button fill.
+  uiAccent: '#c9ced6',
+  uiPanel: '#090a0c',
+  uiButton: '#c9ced6',
 
   // Image — tone mapping and the post-process passes.
   exposure: 0.85, contrast: 1.22, bloom: 0.38,
@@ -20,13 +26,17 @@ export default {
   trailDecay: 'long', trailOpacity: 0.82,
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
-  envColor: '#9aa4b0', envIntensity: 1.4,
-  background: '#83838e', groundColor: '#08090a',
+  envColor: '#9aa4b0', envIntensity: 2.5,
+  background: '#83838e', groundColor: '#494f55',
+  // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
+  waterTint: '#404a54', waterTintStrength: 0.7,
+  // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
+  fog: false, fogColor: '#ffffff', fogOpacity: 0.03, fogStrength: 0.06, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
-  sunColor: '#e8ecf2', sunIntensity: 0.50,
-  skyLight: '#444a52', groundLight: '#2b2e33',
+  sunColor: '#e8ecf2', sunIntensity: 2.59,
+  skyLight: '#87879b', groundLight: '#2b2e33',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.

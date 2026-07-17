@@ -9,21 +9,21 @@
 // To add a theme: drop a file next to this one and add it to THEME_LIST. It
 // carries its own button label and swatch, so nothing in the markup has to know
 // about it.
-import ember from './ember_theme.js';
+import clay from './clay_theme.js';
 import blueprint from './blueprint_theme.js';
 import phosphor from './phosphor_theme.js';
 import grayscale from './grayscale_theme.js';
 
 // Order here is the order the buttons appear in the panel.
-export const THEME_LIST = [ember, blueprint, phosphor, grayscale];
+export const THEME_LIST = [clay, blueprint, phosphor, grayscale];
 
 export const THEMES = Object.fromEntries(THEME_LIST.map((theme) => [theme.id, theme]));
 
-export const DEFAULT_THEME = ember;
+export const DEFAULT_THEME = clay;
 
 // Identity, not look: these name the theme and draw its button, and there is no
 // `applySetting` case for them. Everything else in a bundle is a live setting.
-const META_KEYS = new Set(['id', 'label', 'swatch']);
+const META_KEYS = new Set(['id', 'label', 'theme_dot_swatch', 'theme_dot_accent']);
 
 export const themeValues = (theme) => (
   Object.fromEntries(Object.entries(theme).filter(([key]) => !META_KEYS.has(key)))

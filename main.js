@@ -227,10 +227,39 @@ function applyView(key, value) {
   }
 }
 
+// Reset view flies the camera home rather than snapping: a cubic ease-out so it sets
+// off promptly and glides to a stop at the home framing.
+const RESET_DURATION = 1.1; // seconds
+const easeOutCubic = (k) => 1 - Math.pow(1 - k, 3);
+let resetTween = null;
+
 function resetView() {
-  camera.position.copy(HOME_VIEW.position);
-  controls.target.copy(HOME_VIEW.target);
-  controls.update();
+  resetTween = {
+    fromPos: camera.position.clone(),
+    toPos: HOME_VIEW.position.clone(),
+    fromTarget: controls.target.clone(),
+    toTarget: HOME_VIEW.target.clone(),
+    elapsed: 0,
+  };
+  controls.enabled = false; // the tween owns the camera until it lands
+}
+
+// Advance the fly-home one frame. Returns true while running so the loop can skip
+// controls.update() and let the tween drive the camera without OrbitControls fighting it.
+function updateResetTween(dt) {
+  if (!resetTween) return false;
+  resetTween.elapsed += dt;
+  const k = Math.min(1, resetTween.elapsed / RESET_DURATION);
+  const e = easeOutCubic(k);
+  camera.position.lerpVectors(resetTween.fromPos, resetTween.toPos, e);
+  controls.target.lerpVectors(resetTween.fromTarget, resetTween.toTarget, e);
+  camera.lookAt(controls.target);
+  if (k >= 1) {
+    resetTween = null;
+    controls.enabled = true;
+    controls.update(); // hand control back cleanly, now at the home framing
+  }
+  return true;
 }
 
 // Live-adjustable look. Everything the panel touches lives here so there is one
@@ -281,14 +310,18 @@ const settings = {
   timeOfDay: wallClockMinutes(),
   liveTime: true,
   // Density heatmap — a live choropleth painted onto the buildings from where the
-  // cabs currently are. A view mode, not a look, so it's kept out of the themes
-  // (Restore-to-defaults won't touch it). `heatmapGain` is the sensitivity: how
-  // much traffic a cell needs before it reads as fully "hot".
-  heatmap: false,
+  // fleets currently are. Two independent sources splat into one shared field, so
+  // ticking both gives a merged taxi+bike density. A view mode, not a look, so it's
+  // kept out of the themes. `heatmapGain` is the sensitivity: how much traffic a cell
+  // needs before it reads as fully "hot".
+  heatmapTaxi: false,
+  heatmapBike: false,
   heatmapGain: 1.0,
-  // Overlay data layers, also view modes kept out of the themes. Flows = pickup→dropoff
-  // arcs; events = 311 complaints. Both reveal by the hour on the time scrubber.
-  flows: false,
+  // Overlay data layers, also view modes kept out of the themes. Flows = origin→dropoff
+  // arcs; events = 311 complaints. Both reveal by the hour on the time scrubber. Flows
+  // has two independent sources (taxis, Citi Bike) sharing the width/window/opacity.
+  flowsTaxi: false,
+  flowsBike: false,
   flowOpacity: 0.8,
   flowWidth: 2.6,     // ribbon width in screen pixels
   flowWindow: 1.1,    // ± hours of trips shown around the clock
@@ -313,6 +346,18 @@ const settings = {
   citibikeTail: '#22c98a',
   citibikeDecay: 'long',
   citibikeOpacity: 0.85,
+  // Optional wash of colour over the water (Environment section). Strength 0 = off. Each
+  // theme carries its own pair; these are only the fallback if a theme omits them.
+  waterTint: '#1f7fa8',
+  waterTintStrength: 0.0,
+  // Low-lying ground fog / mist (Environment section). Each theme carries its own set,
+  // including whether it's on; these are only the fallback if a theme omits them. `fog`
+  // toggles it, strength is coverage, noise is how patchy the perlin field makes it.
+  fog: false,
+  fogColor: '#ffffff',
+  fogOpacity: 0.28,
+  fogStrength: 0.06,
+  fogNoise: 0.67,
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -616,6 +661,12 @@ const waterUniforms = {
   uWaterTime: { value: 0 },
   uWaterColor: { value: new THREE.Color('#05070c') },
 
+  // Optional user tint laid over the water's own colour. Strength 0 leaves it untouched;
+  // higher pushes the wet pixels toward uWaterTint. Kept as a mix so a strong colour at a
+  // low strength reads as a wash rather than repainting the river.
+  uWaterTint: { value: new THREE.Color(settings.waterTint) },
+  uWaterTintStrength: { value: settings.waterTintStrength },
+
   // Water is a dielectric, not a mirror. Dropping metalness on the wet pixels is
   // what separates it from the asphalt: the road keeps its flat sheen, while the
   // water goes dark face-on and lights up at grazing angles, which is the whole
@@ -682,6 +733,7 @@ const groundMaterial = new THREE.MeshStandardMaterial({
 
 groundMaterial.onBeforeCompile = (shader) => {
   Object.assign(shader.uniforms, waterUniforms);
+  shareFogUniforms(shader);
 
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', /* glsl */`
@@ -755,6 +807,8 @@ groundMaterial.onBeforeCompile = (shader) => {
       uniform float uWaterRange;
       uniform float uWaterTime;
       uniform vec3 uWaterColor;
+      uniform vec3 uWaterTint;
+      uniform float uWaterTintStrength;
       uniform float uWaterRoughness;
       uniform float uWaterMetalness;
       uniform float uWaveScale;
@@ -762,6 +816,8 @@ groundMaterial.onBeforeCompile = (shader) => {
       uniform vec2 uWindAxis;
       uniform float uShallowFade;
       uniform float uShoreBias;
+
+      ${FOG_FRAGMENT_CHUNK}
 
       // Ashima's simplex noise. Gradient noise rather than value noise, so the swell
       // has no lattice in it — a grid of ripples aligned to the world axes is the one
@@ -870,6 +926,8 @@ groundMaterial.onBeforeCompile = (shader) => {
       // it truly falls inside the texel rather than snapping to its edge.
       float waterMask = smoothstep(1.0, -1.0, waterSd);
       diffuseColor.rgb = mix(diffuseColor.rgb, uWaterColor, waterMask);
+      // User tint over the water only, scaled by strength so it stays a wash not a repaint.
+      diffuseColor.rgb = mix(diffuseColor.rgb, uWaterTint, waterMask * uWaterTintStrength);
     `)
     .replace('#include <roughnessmap_fragment>', /* glsl */`
       #include <roughnessmap_fragment>
@@ -927,6 +985,8 @@ groundMaterial.onBeforeCompile = (shader) => {
         float groundInfinite = smoothstep(0.0, 0.28, min(groundEdge.x, groundEdge.y));
         gl_FragColor.rgb = mix(fogColor, gl_FragColor.rgb, groundInfinite);
       #endif
+      // Ground sits at the street, so it's always in the mist (worldY 0 → full height factor).
+      gl_FragColor.rgb = applyHeightFog(gl_FragColor.rgb, vWaterWorld, 0.0);
     `);
 };
 
@@ -945,6 +1005,69 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.4;
 ground.receiveShadow = true;
 scene.add(ground);
+
+// ---------------------------------------------------------------------------
+// Ground fog — a low-lying mist, computed per-fragment in the building and ground
+// shaders (see their onBeforeCompile) rather than as a plane. Each surface fragment
+// fades toward the fog colour by its world HEIGHT — full at the street, smoothly gone
+// by the fog's top — so buildings dissolve into the mist at their base and rise clear
+// out of it, with no hard edge. `strength` sets how high the mist rises, `opacity` how
+// thick it is, `noise` how patchy the drifting perlin field makes it.
+// ---------------------------------------------------------------------------
+const FOG_SCALE = 0.045; // noise frequency in world units (~its patch size)
+const fogUniforms = {
+  uFogColor: { value: new THREE.Color(settings.fogColor) },
+  uFogOpacity: { value: settings.fogOpacity },
+  uFogStrength: { value: settings.fogStrength },
+  uFogNoise: { value: settings.fogNoise },
+  uFogTime: { value: 0 },
+  uFogEnabled: { value: settings.fog ? 1 : 0 },
+};
+
+// Shared GLSL: the uniform block, a soft value-noise fbm, and the height-fog mix. Dropped
+// into both the building and ground fragment shaders so they fog identically. `worldY` is
+// the fragment's world height (the ground passes ~0, so it's always in the mist).
+const FOG_FRAGMENT_CHUNK = /* glsl */`
+  uniform vec3 uFogColor;
+  uniform float uFogOpacity;
+  uniform float uFogStrength;
+  uniform float uFogNoise;
+  uniform float uFogTime;
+  uniform float uFogEnabled;
+  float fogHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float fogVN(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(fogHash(i), fogHash(i + vec2(1.0, 0.0)), u.x),
+               mix(fogHash(i + vec2(0.0, 1.0)), fogHash(i + vec2(1.0, 1.0)), u.x), u.y);
+  }
+  float fogFBM(vec2 p) {
+    float a = 0.5;
+    float s = 0.0;
+    for (int i = 0; i < 4; i += 1) { s += a * fogVN(p); p = p * 2.0 + 7.3; a *= 0.5; }
+    return s;
+  }
+  vec3 applyHeightFog(vec3 col, vec2 wxz, float worldY) {
+    if (uFogEnabled < 0.5) return col;
+    float top = mix(4.0, 40.0, uFogStrength);          // how high the mist rises
+    float hf = pow(clamp(1.0 - worldY / top, 0.0, 1.0), 1.3); // 1 at the street, 0 by the top
+    float n = fogFBM(wxz * ${FOG_SCALE.toFixed(3)} + uFogTime * vec2(0.012, -0.008));
+    float dens = hf * mix(1.0, n * 1.7, uFogNoise);
+    float amt = clamp(dens, 0.0, 1.0) * uFogOpacity;
+    return mix(col, uFogColor, amt);
+  }
+`;
+
+// Hand the same uniform objects to a material's shader so one update reaches them all.
+function shareFogUniforms(shader) {
+  shader.uniforms.uFogColor = fogUniforms.uFogColor;
+  shader.uniforms.uFogOpacity = fogUniforms.uFogOpacity;
+  shader.uniforms.uFogStrength = fogUniforms.uFogStrength;
+  shader.uniforms.uFogNoise = fogUniforms.uFogNoise;
+  shader.uniforms.uFogTime = fogUniforms.uFogTime;
+  shader.uniforms.uFogEnabled = fogUniforms.uFogEnabled;
+}
 
 // ---------------------------------------------------------------------------
 // Loading UI
@@ -1900,15 +2023,18 @@ async function addBuildings(elements) {
     shader.uniforms.uHeatInvSpan = {
       value: new THREE.Vector2(1 / (heatCols * HEAT_CELL), 1 / (heatRows * HEAT_CELL)),
     };
+    shareFogUniforms(shader);
     buildingMaterial.userData.shader = shader;
 
-    // World XZ of each fragment, so the density lookup lands where the building
-    // actually sits on the map rather than in its local mesh space.
+    // World position of each fragment: XZ for the density lookup, and the full vec3 so
+    // the ground fog can fade the facade by its world height.
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vHeatWorld;')
+      .replace('#include <common>', '#include <common>\nvarying vec2 vHeatWorld;\nvarying vec3 vFogWorld;')
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n\tvHeatWorld = (modelMatrix * vec4(transformed, 1.0)).xz;'
+        '#include <begin_vertex>'
+        + '\n\tvHeatWorld = (modelMatrix * vec4(transformed, 1.0)).xz;'
+        + '\n\tvFogWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;'
       );
 
     shader.fragmentShader = shader.fragmentShader
@@ -1932,6 +2058,8 @@ async function addBuildings(elements) {
           col = mix(col, c3, smoothstep(0.67, 1.0, t));
           return col;
         }
+        varying vec3 vFogWorld;
+        ${FOG_FRAGMENT_CHUNK}
       `)
       // material.diffuseColor is populated by color_fragment (vertexColour × material
       // colour). Recolour it toward the ramp *before* lighting, so the choropleth is
@@ -1949,6 +2077,12 @@ async function addBuildings(elements) {
       .replace(
         '#include <lights_physical_fragment>',
         '#include <lights_physical_fragment>\n\tmaterial.diffuseColor *= uDiffuse;'
+      )
+      // Height fog last, on the lit+tone-mapped colour: the facade dissolves into the
+      // mist at its base and rises clear of it, a smooth gradient with no plane edge.
+      .replace(
+        '#include <fog_fragment>',
+        '#include <fog_fragment>\n\tgl_FragColor.rgb = applyHeightFog(gl_FragColor.rgb, vFogWorld.xz, vFogWorld.y);'
       );
   };
 
@@ -3261,7 +3395,7 @@ heatTexture.wrapT = THREE.ClampToEdgeWrapping;
 heatTexture.needsUpdate = true;
 
 let heatClock = 0;
-let heatStrength = 0;        // eased 0..1, follows settings.heatmap so the toggle fades in/out
+let heatStrength = 0;        // eased 0..1, follows the heatmap toggles so it fades in/out
 
 // Splat one cab into the grid with bilinear spread, so the field doesn't shimmer
 // as cabs cross cell boundaries.
@@ -3284,10 +3418,25 @@ function heatSplat(x, z, amount) {
   }
 }
 
+// Splat one fleet's active agents (taxis or bikes) into the shared density grid. Both
+// write into the same field, so ticking both boxes gives a single merged heatmap.
+function splatFleet(fleet, count, add) {
+  for (let t = 0; t < count; t += 1) {
+    const agent = fleet[t];
+    const edge = edges[agent.edge];
+    if (!edge) continue;
+    const a = nodes[edge.a];
+    const b = nodes[edge.b];
+    const toB = agent.node === edge.b ? agent.progress : 1 - agent.progress;
+    heatSplat(a.x + (b.x - a.x) * toB, a.z + (b.z - a.z) * toB, add);
+  }
+}
+
 function updateHeatmap(dt) {
-  // Ease the toggle so the choropleth fades rather than snaps, and keep the shader
-  // uniforms in step with the sensitivity slider.
-  const target = settings.heatmap ? 1 : 0;
+  // The choropleth shows if either source is on; it splats whichever are ticked into
+  // one shared grid (so both = a merged taxi+bike density).
+  const anyOn = settings.heatmapTaxi || settings.heatmapBike;
+  const target = anyOn ? 1 : 0;
   heatStrength += (target - heatStrength) * Math.min(1, dt * 6);
   const shader = buildingMaterial && buildingMaterial.userData.shader;
   if (shader && shader.uniforms.uHeatStrength) {
@@ -3295,8 +3444,8 @@ function updateHeatmap(dt) {
     shader.uniforms.uHeatScale.value = settings.heatmapGain / HEAT_REF;
   }
 
-  // Fully off and idle: don't spend anything binning cabs into a field no one sees.
-  if (!settings.heatmap && heatStrength < 0.001) return;
+  // Fully off and idle: don't spend anything binning agents into a field no one sees.
+  if (!anyOn && heatStrength < 0.001) return;
 
   heatClock += dt;
   if (heatClock < HEAT_INTERVAL) return;
@@ -3306,18 +3455,11 @@ function updateHeatmap(dt) {
   const decay = Math.pow(0.5, step / HEAT_HALFLIFE);
   for (let i = 0; i < heatDensity.length; i += 1) heatDensity[i] *= decay;
 
-  // Adding (1 - decay) per tick makes a cell a cab never leaves settle at ~1, so the
-  // stored value reads as "cabs currently dwelling here" and HEAT_REF is in cab units.
+  // Adding (1 - decay) per tick makes a cell an agent never leaves settle at ~1, so the
+  // stored value reads as "agents currently dwelling here" and HEAT_REF is in agent units.
   const add = 1 - decay;
-  for (let t = 0; t < activeTaxis; t += 1) {
-    const taxi = taxis[t];
-    const edge = edges[taxi.edge];
-    if (!edge) continue;
-    const a = nodes[edge.a];
-    const b = nodes[edge.b];
-    const toB = taxi.node === edge.b ? taxi.progress : 1 - taxi.progress;
-    heatSplat(a.x + (b.x - a.x) * toB, a.z + (b.z - a.z) * toB, add);
-  }
+  if (settings.heatmapTaxi) splatFleet(taxis, activeTaxis, add);
+  if (settings.heatmapBike) splatFleet(bikes, activeBikes, add);
   heatTexture.needsUpdate = true;
 }
 
@@ -3495,7 +3637,7 @@ function buildFlows(rows) {
   flowsMat.needsUpdate = true;
 
   flowsMesh = new LineSegments2(geo, flowsMat);
-  flowsMesh.visible = settings.flows;
+  flowsMesh.visible = settings.flowsTaxi;
   flowsMesh.frustumCulled = false; // arcs span the whole map; never cull the batch
   flowsMesh.renderOrder = 3;
   scene.add(flowsMesh);
@@ -3914,6 +4056,21 @@ function buildCitibike(rows) {
   bikeFleetHour = currentHour();
 }
 
+// Citi Bike as trip ARCS for the flows section (separate from the bike light-trails):
+// start→drop-off ribbons, green start → blue end, sharing the flows width/window/opacity.
+function buildCitibikeFlows(rows) {
+  return buildArcLayer(rows, {
+    originLon: (r) => parseFloat(r.start_lng),
+    originLat: (r) => parseFloat(r.start_lat),
+    destLon: (r) => parseFloat(r.end_lng),
+    destLat: (r) => parseFloat(r.end_lat),
+    hour: (r) => parseInt(r.hour, 10),
+    colorA: '#39ff9e', colorB: '#2f7bff',
+    archBase: 8, archRate: 0.6, archMax: 48, minDist: 2,
+    keys: { visible: 'flowsBike', width: 'flowWidth', window: 'flowWindow', opacity: 'flowOpacity' },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Fallback city — Overpass is rate limited and does go down. Rather than a
 // blank screen, generate a grid that exercises the same code paths.
@@ -4035,33 +4192,48 @@ async function init() {
     demandModel = null;
   }
 
-  // Overlay layers, both non-fatal — a failure here just leaves that toggle empty.
-  setLoadingState(88, 'Charting flows & reports…');
+  // Overlay data layers, each non-fatal — a failure just leaves that toggle empty. Named
+  // per source so the loader's build log shows every dataset as it comes down.
+  setLoadingState(86, 'Charting trip flows…');
   await nextFrame();
   try {
     if (demandRows) buildFlows(demandRows); // pickup→dropoff arcs share the demand file
   } catch (error) {
     console.warn('Flows overlay unavailable:', error);
   }
+
+  setLoadingState(87, 'Mapping 311 complaints…');
   try {
     buildEvents(await loadEvents());
   } catch (error) {
     console.warn('Events overlay unavailable:', error);
   }
-  // Extra datasets on the reusable factories — each independent and non-fatal.
-  for (const [name, build] of [
-    ['collisions', buildCollisions],
-    ['crime', buildCrime],
-    ['citibike', buildCitibike],
-  ]) {
-    try {
-      build(await loadSnapshot(SNAPSHOT_FILES[name]));
-    } catch (error) {
-      console.warn(`${name} overlay unavailable:`, error);
-    }
+
+  setLoadingState(88, 'Plotting vehicle collisions…');
+  try {
+    buildCollisions(await loadSnapshot(SNAPSHOT_FILES.collisions));
+  } catch (error) {
+    console.warn('collisions overlay unavailable:', error);
   }
 
-  setLoadingState(90, 'Dispatching taxis…');
+  setLoadingState(89, 'Plotting crime reports…');
+  try {
+    buildCrime(await loadSnapshot(SNAPSHOT_FILES.crime));
+  } catch (error) {
+    console.warn('crime overlay unavailable:', error);
+  }
+
+  // Citi Bike feeds two views from one file: the light-trail fleet AND the flows arcs.
+  setLoadingState(90, 'Threading Citi Bike routes…');
+  try {
+    const citibikeRows = await loadSnapshot(SNAPSHOT_FILES.citibike);
+    buildCitibike(citibikeRows);
+    buildCitibikeFlows(citibikeRows);
+  } catch (error) {
+    console.warn('citibike overlays unavailable:', error);
+  }
+
+  setLoadingState(92, 'Dispatching the fleets…');
   await nextFrame();
   if (edges.length > 0) {
     spawnTaxis();
@@ -4170,10 +4342,12 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = Math.min(clock.getDelta(), 0.05); // clamp: tab-switch stalls
-  controls.update();
+  // While Reset view is flying home the tween drives the camera; otherwise OrbitControls.
+  if (!updateResetTween(dt)) controls.update();
   checkFlyover();
 
   waterUniforms.uWaterTime.value += dt;
+  if (settings.fog) fogUniforms.uFogTime.value += dt;
 
   // After controls.update(), so the focus plane tracks the damped camera rather
   // than lagging a frame behind it during a drag.
@@ -4187,8 +4361,9 @@ function animate() {
     updateTaxis(dt);
     decayHeat(dt);
   }
-  // The bike fleet only runs while its layer is shown — no cost when it's off.
-  if (settings.citibike && bikes.length > 0) {
+  // The bike fleet runs when its trail layer OR its density heatmap is on — no cost
+  // otherwise. decayBikeHeat keeps the (hidden) trail buffers sane for a later reveal.
+  if ((settings.citibike || settings.heatmapBike) && bikes.length > 0) {
     updateBikes(dt);
     decayBikeHeat(dt);
   }
@@ -4443,9 +4618,10 @@ function applySetting(key, value) {
         applyTimeOfDay();
       }
       break;
-    case 'flows':
+    case 'flowsTaxi':
       if (flowsMesh) flowsMesh.visible = value;
       break;
+    // flowsBike is a registered arc layer — the generic overlay lookup above toggles it.
     case 'events':
       if (eventsMesh) eventsMesh.visible = value;
       break;
@@ -4525,6 +4701,27 @@ function applySetting(key, value) {
       // ripple, not the hue.
       waterUniforms.uWaterColor.value.set(value).multiplyScalar(0.55);
       break;
+    case 'waterTint':
+      waterUniforms.uWaterTint.value.set(value);
+      break;
+    case 'waterTintStrength':
+      waterUniforms.uWaterTintStrength.value = value;
+      break;
+    case 'fog':
+      fogUniforms.uFogEnabled.value = value ? 1 : 0;
+      break;
+    case 'fogColor':
+      fogUniforms.uFogColor.value.set(value);
+      break;
+    case 'fogOpacity':
+      fogUniforms.uFogOpacity.value = value;
+      break;
+    case 'fogStrength':
+      fogUniforms.uFogStrength.value = value;
+      break;
+    case 'fogNoise':
+      fogUniforms.uFogNoise.value = value;
+      break;
     case 'skyLight':
       ambient.color.set(value);
       break;
@@ -4537,10 +4734,18 @@ function applySetting(key, value) {
     case 'sunIntensity':
       sun.intensity = value;
       break;
-    case 'accent':
-      // The panel is styled entirely off this one custom property, so the UI
-      // re-tints with the map instead of leaving orange chrome over a green city.
+    case 'uiAccent':
+      // The panel chrome is styled off this one custom property, so the UI re-tints
+      // with the theme instead of leaving orange chrome over a green city.
       document.documentElement.style.setProperty('--accent', value);
+      break;
+    case 'uiPanel':
+      // Base colour of the panel/card backgrounds (the CSS applies the frost/alpha).
+      document.documentElement.style.setProperty('--panel-bg', value);
+      break;
+    case 'uiButton':
+      // Fill colour the panel buttons are mixed from.
+      document.documentElement.style.setProperty('--ui-button', value);
       break;
   }
 }
@@ -4597,7 +4802,8 @@ const THEME_SWATCHES = [
 // lives (camera keys on `view`, everything else on `settings`). `swatch` is the dot
 // colour chosen in the dialog; it falls back to the accent.
 function captureTheme(label, swatch) {
-  const theme = { id: `custom-${Date.now()}`, label, swatch: swatch || settings.accent };
+  const dot = swatch || settings.uiAccent;
+  const theme = { id: `custom-${Date.now()}`, label, theme_dot_swatch: dot, theme_dot_accent: dot };
   for (const key of THEME_VALUE_KEYS) {
     theme[key] = VIEW_KEYS.has(key) ? view[key] : settings[key];
   }
@@ -4806,7 +5012,11 @@ function setupControls() {
     button.dataset.theme = theme.id;
 
     const swatch = document.createElement('i');
-    swatch.style.background = theme.swatch;
+    // Fall back to the old `swatch`/`accent` keys so custom themes saved before the rename
+    // still show a dot.
+    const dotFill = theme.theme_dot_swatch || theme.swatch || settings.uiAccent;
+    swatch.style.background = dotFill;
+    swatch.style.color = theme.theme_dot_accent || theme.accent || dotFill; // dot glow = currentColor
     button.append(swatch, document.createTextNode(theme.label));
     button.addEventListener('click', () => {
       applyTheme(theme.id);
@@ -4948,18 +5158,18 @@ const SECTION_INFO = {
   flows: {
     title: 'Trip flows',
     body: `
-      <p>Each arc is one real taxi trip, drawn from where it was <strong>picked up</strong>
-      to where it was <strong>dropped off</strong>. A glow travels along the arc from
-      origin to destination — cool blue where the ride began, warm orange where it ended
-      — so you can read which way the city is moving.</p>
+      <p>Each arc is one real trip, drawn from where it <strong>started</strong> to where it
+      <strong>ended</strong>, with a glow travelling the arc so you can read which way the
+      city is moving. Two independent sources: <strong>Taxi trips</strong> (cool→warm, 2015
+      yellow-cab records) and <strong>CitiBike trips</strong> (green→blue). Show either or
+      both.</p>
       <p>Only trips from around the current hour are shown, so dragging the
-      <strong>Time of day</strong> slider sweeps through the day: watch the morning rush
-      into Midtown reverse into an evening spread back out. The data is real 2015
-      yellow-cab records from NYC Open Data.</p>
-      <p class="info-controls"><strong>Width</strong> — how thick each ribbon is drawn.
-      <strong>Hour spread</strong> — how many hours of trips share the screen at once: low
-      is a crisp single-hour snapshot, high blends neighbouring hours into a fuller,
-      calmer picture. <strong>Opacity</strong> — fades the whole layer up or down.</p>`,
+      <strong>Time of day</strong> slider sweeps the day: watch the morning rush into
+      Midtown reverse into an evening spread back out.</p>
+      <p class="info-controls"><strong>Width</strong> — ribbon thickness.
+      <strong>Hour spread</strong> — how many hours share the screen at once: low is a crisp
+      single-hour snapshot, high blends neighbouring hours. <strong>Opacity</strong> — fades
+      the layer. All three apply to both sources.</p>`,
   },
   events: {
     title: '311 reports',
@@ -4979,13 +5189,14 @@ const SECTION_INFO = {
   heatmap: {
     title: 'Density heatmap',
     body: `
-      <p>The buildings are re-coloured by how many taxis are moving nearby, right now —
+      <p>The buildings are re-coloured by how much traffic is moving nearby, right now —
       a live <strong>choropleth</strong> painted onto the city. Quiet blocks keep their
       normal colour; busy areas climb a <strong>cool → hot</strong> ramp (blue → teal →
       amber → red).</p>
-      <p>It updates continuously as the cabs drive, and shifts when you scrub the
-      <strong>Time of day</strong> slider, because the fleet re-seeds from that hour's
-      real demand. Needs the buildings shown.</p>
+      <p><strong>Taxi density</strong> and <strong>CitiBike density</strong> are separate
+      sources that feed one shared field, so ticking both shows a single <strong>merged</strong>
+      heatmap of where taxis and bikes together are thickest. It updates as they drive and
+      shifts with the <strong>Time of day</strong> slider. Needs the buildings shown.</p>
       <p class="info-controls"><strong>Sensitivity</strong> — how much traffic a block
       needs before it reads as fully hot: raise it to make the map cooler and pick out
       only the busiest streets, lower it to light the city up sooner.</p>`,

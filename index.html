@@ -25,6 +25,12 @@
         --fill: color-mix(in srgb, var(--accent) 12%, transparent);
         --fill-strong: color-mix(in srgb, var(--accent) 20%, transparent);
         --glow: color-mix(in srgb, var(--accent) 75%, transparent);
+        /* Panel/card base colour and button fill — set per theme (uiPanel / uiButton),
+           the frost alpha stays here. --ui-button falls back to the accent. */
+        --panel-bg: #090a0c;
+        --ui-button: var(--accent);
+        --btn: color-mix(in srgb, var(--ui-button) 13%, transparent);
+        --btn-strong: color-mix(in srgb, var(--ui-button) 22%, transparent);
       }
 
       html, body {
@@ -322,7 +328,7 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        width: 232px;
+        width: 244px;
         /* Never taller than the viewport (20px margin top and bottom). The long
            panel below shrinks and scrolls inside this rather than running off
            the bottom of the screen out of reach. */
@@ -340,7 +346,7 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        width: 210px;
+        width: 221px;
         max-height: calc(100vh - 170px); /* 150px top + 20px bottom margin */
       }
 
@@ -391,7 +397,7 @@
         width: 100%;
         border: 1px solid var(--edge-soft);
         border-radius: 14px;
-        background: rgba(9, 10, 12, 0.74);
+        background: color-mix(in srgb, var(--panel-bg) 74%, transparent);
         backdrop-filter: blur(14px);
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
         font-size: 12px;
@@ -566,7 +572,7 @@
         top: -1px;
         padding-top: 1px;
         z-index: 2;
-        background: rgba(9, 10, 12, 0.92);
+        background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
         backdrop-filter: blur(14px);
       }
 
@@ -658,6 +664,13 @@
         flex-direction: column;
         gap: 6px;
         color: var(--text);
+      }
+
+      /* A thin rule to visually group the controls below it (e.g. the water tint pair). */
+      .panel .group-divider {
+        height: 1px;
+        margin: 3px 0 1px;
+        background: var(--edge-soft);
       }
 
       .panel label > span {
@@ -894,7 +907,7 @@
         padding: 0;
         border: 1px solid var(--edge-soft);
         border-radius: 14px;
-        background: rgba(9, 10, 12, 0.74);
+        background: color-mix(in srgb, var(--panel-bg) 74%, transparent);
         backdrop-filter: blur(14px);
         color: var(--text);
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
@@ -1118,14 +1131,14 @@
         padding: 8px;
         border: 1px solid var(--edge-soft);
         border-radius: 8px;
-        background: var(--fill);
+        background: var(--btn);
         color: var(--text);
         font: inherit;
         cursor: pointer;
       }
 
       .panel-reset:hover {
-        background: var(--fill-strong);
+        background: var(--btn-strong);
       }
 
       .info,
@@ -1272,14 +1285,18 @@
             </button>
           </h2>
           <label class="check">
-            <input type="checkbox" data-setting="heatmap" />
-            <span>Colour buildings by taxi density</span>
+            <input type="checkbox" data-setting="heatmapTaxi" />
+            <span>Taxi density</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="heatmapBike" />
+            <span>CitiBike density</span>
           </label>
           <label>
             <span>Sensitivity<em data-value="heatmapGain"></em></span>
             <input type="range" data-setting="heatmapGain" min="0.2" max="4" step="0.05" value="1" />
           </label>
-          <p class="hint">Needs buildings shown. Adapts live and follows the time-of-day slider.</p>
+          <p class="hint">Colours the buildings by nearby traffic. Tick both to see a merged taxi + bike density. Needs buildings shown.</p>
         </section>
 
         <section data-collapsed>
@@ -1295,8 +1312,12 @@
             </button>
           </h2>
           <label class="check">
-            <input type="checkbox" data-setting="flows" />
-            <span>Show pickup → dropoff arcs</span>
+            <input type="checkbox" data-setting="flowsTaxi" />
+            <span>Taxi trips</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="flowsBike" />
+            <span>CitiBike trips</span>
           </label>
           <label>
             <span>Width<em data-value="flowWidth"></em></span>
@@ -1310,7 +1331,7 @@
             <span>Opacity<em data-value="flowOpacity"></em></span>
             <input type="range" data-setting="flowOpacity" min="0.1" max="1" step="0.01" value="0.8" />
           </label>
-          <p class="hint">Cool origin → warm destination, with a glow travelling each trip. Follows the time slider.</p>
+          <p class="hint">Origin → destination arcs, each with a glow travelling the trip. Taxis run cool→warm, CitiBike green→blue. Width/spread/opacity apply to both.</p>
         </section>
 
         <section data-collapsed>
@@ -1452,13 +1473,14 @@
             </button>
           </h2>
           <label class="swatch">
-            <span>Colour</span>
+            <span>Environment colour</span>
             <input type="color" data-setting="envColor" value="#ff8a2e" />
           </label>
           <label>
             <span>Reflection<em data-value="envIntensity"></em></span>
             <input type="range" data-setting="envIntensity" min="0" max="4" step="0.01" value="1.6" />
           </label>
+          <div class="group-divider"></div>
           <label class="swatch">
             <span>Floor colour</span>
             <input type="color" data-setting="groundColor" value="#05070c" />
@@ -1467,21 +1489,43 @@
             <span>Sky colour</span>
             <input type="color" data-setting="background" value="#04050a" />
           </label>
-        </section>
-
-        <section data-collapsed>
-          <h2>
-            <button type="button" class="section-toggle" aria-expanded="false">
-              <span>Sun</span>
-              <span class="chev" aria-hidden="true">+</span>
-            </button>
-          </h2>
+          <div class="group-divider"></div>
           <label class="swatch">
-            <span>Colour</span>
+            <span>Water tint</span>
+            <input type="color" data-setting="waterTint" value="#1f7fa8" />
+          </label>
+          <label>
+            <span>Water tint strength<em data-value="waterTintStrength"></em></span>
+            <input type="range" data-setting="waterTintStrength" min="0" max="1" step="0.01" value="0" />
+          </label>
+          <div class="group-divider"></div>
+          <label class="check">
+            <input type="checkbox" data-setting="fog" />
+            <span>Ground fog</span>
+          </label>
+          <label class="swatch">
+            <span>Fog colour</span>
+            <input type="color" data-setting="fogColor" value="#ffffff" />
+          </label>
+          <label>
+            <span>Opacity<em data-value="fogOpacity"></em></span>
+            <input type="range" data-setting="fogOpacity" min="0" max="1" step="0.01" value="0.28" />
+          </label>
+          <label>
+            <span>Strength<em data-value="fogStrength"></em></span>
+            <input type="range" data-setting="fogStrength" min="0" max="1" step="0.01" value="0.06" />
+          </label>
+          <label>
+            <span>Noise<em data-value="fogNoise"></em></span>
+            <input type="range" data-setting="fogNoise" min="0" max="1" step="0.01" value="0.67" />
+          </label>
+          <div class="group-divider"></div>
+          <label class="swatch">
+            <span>Sun colour</span>
             <input type="color" data-setting="sunColor" value="#ffd0a0" />
           </label>
           <label>
-            <span>Strength<em data-value="sunIntensity"></em></span>
+            <span>Sun strength<em data-value="sunIntensity"></em></span>
             <input type="range" data-setting="sunIntensity" min="0" max="3" step="0.01" value="0.45" />
           </label>
         </section>
@@ -1684,10 +1728,11 @@
           <p>
             A real-time 3D render of Manhattan, built from live
             <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap</a>
-            geometry. The traffic is seeded from
-            <a href="https://data.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a>
-            — real yellow-taxi pick-up and drop-off records — so the fleet clusters where
-            cabs actually worked, shifting with the time of day.
+            geometry and layered with real
+            <a href="https://data.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a>:
+            yellow-taxi and Citi Bike trips, 311 complaints, vehicle collisions and crime
+            reports. Everything is placed where it actually happened and tied to the hour it
+            happened, so the city replays its own day as you scrub the time of day.
           </p>
         </section>
 
