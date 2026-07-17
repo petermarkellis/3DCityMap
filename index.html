@@ -328,7 +328,9 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        width: 244px;
+        /* Wide enough for a phased row: four 34px cells plus their gaps need ~156px,
+           leaving the label column a readable ~100px. */
+        width: 300px;
         /* Never taller than the viewport (20px margin top and bottom). The long
            panel below shrinks and scrolls inside this rather than running off
            the bottom of the screen out of reach. */
@@ -671,6 +673,104 @@
         height: 1px;
         margin: 3px 0 1px;
         background: var(--edge-soft);
+      }
+
+      /* ---- Time-of-day columns -------------------------------------------------
+         Keys a theme's `phases` block moves get one cell per column: Day (the
+         theme's own value) then Dawn / Dusk / Night. One shared grid template
+         across the header, the colour rows and the scalar rows is what lets a
+         single header sit at the top of a section and still line up with every
+         phased row below it — even with unphased rows in between, because the
+         cells are a fixed width pinned to the trailing edge. */
+      .panel .phase-grid {
+        display: grid;
+        grid-template-columns: 1fr repeat(4, 34px);
+        gap: 5px;
+        align-items: center;
+      }
+
+      .panel .phase-head {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .panel .phase-head span {
+        text-align: center;
+      }
+
+      /* The Day cell is the authored value the theme file carries; the rest are the
+         phase columns. Same control, so they get the same 34px footprint. */
+      .panel .phase-grid input[type="color"] {
+        width: 34px;
+      }
+
+      /* Scalars keep their full-width Day slider — a row of four sliders is
+         unusable at this width — and hang their phase values underneath as compact
+         boxes, in the same grid so they sit under the right headers. The blank
+         second cell is the Day column: the slider above already is Day. */
+      .panel .phase-nums {
+        margin-top: -3px;
+      }
+
+      .panel .phase-nums input[type="number"] {
+        width: 34px;
+        padding: 2px 0;
+        border: 1px solid var(--edge);
+        border-radius: 5px;
+        background: var(--fill);
+        color: var(--text);
+        font: inherit;
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+        appearance: textfield;
+        -moz-appearance: textfield;
+      }
+
+      /* The spinners cost more width than they earn at 34px. */
+      .panel .phase-nums input[type="number"]::-webkit-outer-spin-button,
+      .panel .phase-nums input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+
+      .panel .phase-nums input[type="number"]:focus-visible {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      /* A phased row's name sits on the label column of the grid rather than in its
+         own flex row, so it can't push the cells out of alignment. */
+      .panel .phase-grid > .phase-name {
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* An unphased colour inside a section that has phase columns still has to say
+         which column it's in. Left at the trailing edge — where every other swatch in
+         the panel sits — it lands under NIGHT and reads as a night value. Parked in
+         the Day column it reads as what it is: one value, used at every hour.
+         Scoped by :has so swatches in sections with no phase columns (the trail
+         head/tail, Citi Bike) keep their normal trailing-edge layout.
+
+         :not([data-collapsed]) is not decoration. This selector outweighs the
+         `section[data-collapsed] > *:not(h2) { display: none }` collapse rule above,
+         so without the guard `display: grid` wins and these swatches stay on screen
+         after their section is folded away. */
+      .panel section:has(.phase-head):not([data-collapsed]) label.swatch {
+        display: grid;
+        grid-template-columns: 1fr repeat(4, 34px);
+        gap: 5px;
+        align-items: center;
+      }
+
+      .panel section:has(.phase-head) label.swatch input[type="color"] {
+        width: 34px;
       }
 
       .panel label > span {
@@ -1201,18 +1301,39 @@
               <span class="chev" aria-hidden="true">+</span>
             </button>
           </h2>
+          <div class="phase-grid phase-head">
+            <span></span><span>Day</span><span>Dawn</span><span>Dusk</span><span>Night</span>
+          </div>
           <label>
             <span>Brightness<em data-value="exposure"></em></span>
             <input type="range" data-setting="exposure" min="0.2" max="2" step="0.01" value="0.9" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="exposure" min="0.2" max="2" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="exposure" min="0.2" max="2" step="0.01" />
+            <input type="number" data-phase="night" data-setting="exposure" min="0.2" max="2" step="0.01" />
+          </div>
           <label>
             <span>Contrast<em data-value="contrast"></em></span>
             <input type="range" data-setting="contrast" min="0.5" max="2" step="0.01" value="1" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="contrast" min="0.5" max="2" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="contrast" min="0.5" max="2" step="0.01" />
+            <input type="number" data-phase="night" data-setting="contrast" min="0.5" max="2" step="0.01" />
+          </div>
           <label>
             <span>Glow<em data-value="bloom"></em></span>
             <input type="range" data-setting="bloom" min="0" max="1.5" step="0.01" value="0.55" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="bloom" min="0" max="1.5" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="bloom" min="0" max="1.5" step="0.01" />
+            <input type="number" data-phase="night" data-setting="bloom" min="0" max="1.5" step="0.01" />
+          </div>
           <label class="check">
             <input type="checkbox" data-setting="depthOfField" checked />
             <span>Depth of field</span>
@@ -1472,27 +1593,80 @@
               <span class="chev" aria-hidden="true">+</span>
             </button>
           </h2>
-          <label class="swatch">
-            <span>Environment colour</span>
+          <!-- One header for the whole section: the cells are a fixed width pinned to
+               the trailing edge, so it lines up with every phased row below even with
+               unphased ones (the fog group, water tint) in between. -->
+          <div class="phase-grid phase-head">
+            <span></span><span>Day</span><span>Dawn</span><span>Dusk</span><span>Night</span>
+          </div>
+          <div class="phase-grid">
+            <span class="phase-name">Environment colour</span>
             <input type="color" data-setting="envColor" value="#ff8a2e" />
-          </label>
+            <input type="color" data-phase="dawn" data-setting="envColor" />
+            <input type="color" data-phase="dusk" data-setting="envColor" />
+            <input type="color" data-phase="night" data-setting="envColor" />
+          </div>
           <label>
             <span>Reflection<em data-value="envIntensity"></em></span>
             <input type="range" data-setting="envIntensity" min="0" max="4" step="0.01" value="1.6" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="envIntensity" min="0" max="4" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="envIntensity" min="0" max="4" step="0.01" />
+            <input type="number" data-phase="night" data-setting="envIntensity" min="0" max="4" step="0.01" />
+          </div>
           <div class="group-divider"></div>
-          <label class="swatch">
-            <span>Floor colour</span>
+          <div class="phase-grid">
+            <span class="phase-name">Floor colour</span>
             <input type="color" data-setting="groundColor" value="#05070c" />
+            <input type="color" data-phase="dawn" data-setting="groundColor" />
+            <input type="color" data-phase="dusk" data-setting="groundColor" />
+            <input type="color" data-phase="night" data-setting="groundColor" />
+          </div>
+          <!-- Floor reflection strength: how much of the sky/env the near-mirror asphalt
+               throws back. Phaseable, so the streets can read wetter at night. -->
+          <label>
+            <span>Floor reflection<em data-value="floorReflection"></em></span>
+            <input type="range" data-setting="floorReflection" min="0" max="2" step="0.01" value="0.7" />
           </label>
-          <label class="swatch">
-            <span>Sky colour</span>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="floorReflection" min="0" max="2" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="floorReflection" min="0" max="2" step="0.01" />
+            <input type="number" data-phase="night" data-setting="floorReflection" min="0" max="2" step="0.01" />
+          </div>
+          <!-- Floor softness = roughness: low is a sharp mirror, high is matte. Named to
+               match the buildings' "Softness" control, which is the same property. -->
+          <label>
+            <span>Floor softness<em data-value="floorRoughness"></em></span>
+            <input type="range" data-setting="floorRoughness" min="0.02" max="1" step="0.01" value="0.42" />
+          </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="floorRoughness" min="0.02" max="1" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="floorRoughness" min="0.02" max="1" step="0.01" />
+            <input type="number" data-phase="night" data-setting="floorRoughness" min="0.02" max="1" step="0.01" />
+          </div>
+          <div class="phase-grid">
+            <span class="phase-name">Sky colour</span>
             <input type="color" data-setting="background" value="#04050a" />
-          </label>
+            <input type="color" data-phase="dawn" data-setting="background" />
+            <input type="color" data-phase="dusk" data-setting="background" />
+            <input type="color" data-phase="night" data-setting="background" />
+          </div>
           <label>
             <span>Haze<em data-value="hazeStrength"></em></span>
             <input type="range" data-setting="hazeStrength" min="0" max="1" step="0.01" value="0.5" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="hazeStrength" min="0" max="1" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="hazeStrength" min="0" max="1" step="0.01" />
+            <input type="number" data-phase="night" data-setting="hazeStrength" min="0" max="1" step="0.01" />
+          </div>
+          <!-- No phase columns on the fade: it's a boolean, and the blend has no
+               midpoint for one — it would snap from off to on halfway through dusk. -->
           <label class="check">
             <input type="checkbox" data-setting="hazeFade" checked />
             <span>Thin haze when zoomed out</span>
@@ -1528,14 +1702,41 @@
             <input type="range" data-setting="fogNoise" min="0" max="1" step="0.01" value="0.67" />
           </label>
           <div class="group-divider"></div>
-          <label class="swatch">
-            <span>Sun colour</span>
+          <div class="phase-grid">
+            <span class="phase-name">Sun colour</span>
             <input type="color" data-setting="sunColor" value="#ffd0a0" />
-          </label>
+            <input type="color" data-phase="dawn" data-setting="sunColor" />
+            <input type="color" data-phase="dusk" data-setting="sunColor" />
+            <input type="color" data-phase="night" data-setting="sunColor" />
+          </div>
           <label>
             <span>Sun strength<em data-value="sunIntensity"></em></span>
             <input type="range" data-setting="sunIntensity" min="0" max="3" step="0.01" value="0.45" />
           </label>
+          <div class="phase-grid phase-nums">
+            <span></span><span></span>
+            <input type="number" data-phase="dawn" data-setting="sunIntensity" min="0" max="3" step="0.01" />
+            <input type="number" data-phase="dusk" data-setting="sunIntensity" min="0" max="3" step="0.01" />
+            <input type="number" data-phase="night" data-setting="sunIntensity" min="0" max="3" step="0.01" />
+          </div>
+          <!-- The two halves of the ambient hemisphere. These have never had a control —
+               they only ever travelled with the theme file — but they're phased keys, and
+               the sky half going deep blue while the street bounce keeps its sodium is
+               most of what sells night. So they get a row, Day column included. -->
+          <div class="phase-grid">
+            <span class="phase-name">Sky light</span>
+            <input type="color" data-setting="skyLight" value="#3c4458" />
+            <input type="color" data-phase="dawn" data-setting="skyLight" />
+            <input type="color" data-phase="dusk" data-setting="skyLight" />
+            <input type="color" data-phase="night" data-setting="skyLight" />
+          </div>
+          <div class="phase-grid">
+            <span class="phase-name">Bounce light</span>
+            <input type="color" data-setting="groundLight" value="#4a2410" />
+            <input type="color" data-phase="dawn" data-setting="groundLight" />
+            <input type="color" data-phase="dusk" data-setting="groundLight" />
+            <input type="color" data-phase="night" data-setting="groundLight" />
+          </div>
         </section>
 
         <section data-collapsed>
@@ -1553,10 +1754,16 @@
             <span>Opacity<em data-value="buildingOpacity"></em></span>
             <input type="range" data-setting="buildingOpacity" min="0" max="1" step="0.01" value="1" />
           </label>
-          <label class="swatch">
-            <span>Base colour</span>
+          <div class="phase-grid phase-head">
+            <span></span><span>Day</span><span>Dawn</span><span>Dusk</span><span>Night</span>
+          </div>
+          <div class="phase-grid">
+            <span class="phase-name">Base colour</span>
             <input type="color" data-setting="buildingColor" value="#16181e" />
-          </label>
+            <input type="color" data-phase="dawn" data-setting="buildingColor" />
+            <input type="color" data-phase="dusk" data-setting="buildingColor" />
+            <input type="color" data-phase="night" data-setting="buildingColor" />
+          </div>
           <label class="check">
             <input type="checkbox" data-setting="reflectTrails" />
             <span>Reflect trails</span>

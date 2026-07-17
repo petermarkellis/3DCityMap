@@ -28,6 +28,7 @@ export default {
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#9aa4b0', envIntensity: 2.5,
   background: '#6a6a81', groundColor: '#494f55',
+  floorReflection: 1.10, floorRoughness: 0.42,
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
   waterTint: '#6b6b85', waterTintStrength: 0.7,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.

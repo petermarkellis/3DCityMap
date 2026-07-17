@@ -12,7 +12,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-import { THEMES, THEME_LIST, DEFAULT_THEME, themeValues } from './themes/index.js';
+import { THEMES, THEME_LIST, DEFAULT_THEME, themeValues, themePhases } from './themes/index.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -184,6 +184,10 @@ const UI_STYLE_KEYS = ['uiAccent', 'uiPanel', 'uiButton'];
 // into `view` before that (nothing breaks — the sliders just sync when set up), so
 // this stays a no-op until then.
 let syncCameraPanel = () => {};
+
+// Assigned by setupControls: repaints the look panel's live readouts (the number beside
+// each phased slider) so they track the blend as the clock moves. No-op until then.
+let syncLookReadouts = () => {};
 
 // What the left button does in each mode. The right button always picks up whichever
 // of orbit/pan the left one just gave away, so choosing a mode can never strand you
@@ -390,6 +394,13 @@ const settings = {
   // theme carries its own pair; these are only the fallback if a theme omits them.
   waterTint: '#1f7fa8',
   waterTintStrength: 0.0,
+  // Asphalt-floor reflection (Environment section). The streets are a near-mirror
+  // (metalness 0.85), so how much of the sky/env dome they throw back — and how sharp
+  // it is — reads as wet-vs-dry road. `floorReflection` is the env-map strength (was
+  // hardwired to envIntensity × 0.44; now its own control); `floorRoughness` is the
+  // gloss, low = mirror, high = matte. Each theme carries its own; these are fallbacks.
+  floorReflection: 0.7,
+  floorRoughness: 0.42,
   // Low-lying ground fog / mist (Environment section). Each theme carries its own set,
   // including whether it's on; these are only the fallback if a theme omits them. `fog`
   // toggles it, strength is coverage, noise is how patchy the perlin field makes it.
@@ -614,6 +625,9 @@ const ambient = new THREE.HemisphereLight(0x35425e, 0x4a2410, 0.55);
 scene.add(ambient);
 
 const sun = new THREE.DirectionalLight(settings.sunColor, settings.sunIntensity);
+// Placed by updateSun off the time-of-day clock (see the sun arc, below) — this is only
+// where it sits for the instant before the first placement. It's the solar-noon point of
+// the arc, which is exactly where this light used to be nailed.
 sun.position.set(-300, 400, 200);
 scene.add(sun);
 
@@ -769,10 +783,12 @@ const waterUniforms = {
 
 const groundMaterial = new THREE.MeshStandardMaterial({
   color: '#05070c',
-  roughness: 0.42,
+  // Both driven live by the Floor controls (see applySetting); seeded from settings so a
+  // cold load already reflects the theme's floor without waiting for a control to move.
+  roughness: settings.floorRoughness,
   metalness: 0.85,
   roughnessMap: buildNoiseTexture(28),
-  envMapIntensity: 0.7,
+  envMapIntensity: settings.floorReflection,
 });
 
 groundMaterial.onBeforeCompile = (shader) => {
@@ -1162,6 +1178,14 @@ function syncTimeControl() {
 // and from the slider's applySetting.
 function applyTimeOfDay() {
   renderTimeOfDay(settings.timeOfDay);
+  // Drift the palette toward night/day and swing the sun to match. Both callers land
+  // here — the slider and the once-a-minute live tick — so the look tracks the clock on
+  // either path.
+  applyPhaseBlend();
+  updateSun();
+  // The blend just moved the phased keys' live values; repaint their readouts so the
+  // Image/Environment numbers visibly track the clock even though the handles don't.
+  syncLookReadouts();
   const hour = Math.floor(settings.timeOfDay / 60);
   if (hour !== fleetHour) {
     fleetHour = hour;
@@ -4810,10 +4834,17 @@ function applySetting(key, value) {
       applyEnvironment(value);
       break;
     case 'envIntensity':
-      // The ground is asphalt and water, not glass — it should stay markedly
-      // duller than the towers, so it tracks the same slider at a fraction.
+      // Buildings only now — the floor used to track this slider at 0.44×, but it has
+      // its own Floor reflection control, so the two are decoupled.
       applyBuildingEnvIntensity();
-      groundMaterial.envMapIntensity = value * 0.44;
+      break;
+    case 'floorReflection':
+      groundMaterial.envMapIntensity = value;
+      break;
+    case 'floorRoughness':
+      // The roughnessMap still modulates this per-texel; setting the base scales the
+      // whole floor between mirror (low) and matte (high).
+      groundMaterial.roughness = value;
       break;
     case 'buildingsVisible':
       if (buildingMesh) buildingMesh.visible = value;
@@ -4942,8 +4973,11 @@ const CUSTOM_THEMES_KEY = 'taxitaxi_custom_themes_v1';
 
 // The value keys a theme bundle carries — everything in a built-in theme but its
 // identity fields. Camera-motion keys live on `view`; the rest on `settings`.
-const THEME_VALUE_KEYS = Object.keys(DEFAULT_THEME)
-  .filter((key) => key !== 'id' && key !== 'label' && key !== 'swatch');
+// Derived through themeValues so there is one definition of "is this a live value",
+// shared with applyTheme: hand-listing the exclusions here meant `phases` would be
+// captured as if it were a setting, and `theme_dot_swatch` already was — which is why
+// captureTheme's loop overwrote the dot colour it had just been handed with undefined.
+const THEME_VALUE_KEYS = Object.keys(themeValues(DEFAULT_THEME));
 
 function loadCustomThemes() {
   try {
@@ -4984,8 +5018,22 @@ const THEME_SWATCHES = [
 function captureTheme(label, swatch) {
   const dot = swatch || settings.uiAccent;
   const theme = { id: `custom-${Date.now()}`, label, theme_dot_swatch: dot, theme_dot_accent: dot };
-  for (const key of THEME_VALUE_KEYS) {
-    theme[key] = VIEW_KEYS.has(key) ? view[key] : settings[key];
+  // The union, because a key can be phased without being a standard theme value — haze
+  // is exactly that: it lives on `settings` as a view pref and no theme file carries it.
+  // Saving only THEME_VALUE_KEYS would write a `phases` column naming a key the bundle
+  // has no day value for, and armPhases skips any key whose day value is missing. The
+  // override would persist and then be silently ignored on reload.
+  for (const key of new Set([...THEME_VALUE_KEYS, ...blendKeys])) {
+    // readAuthored, not settings[key]: a phased key's slot in `settings` holds the
+    // value the clock last blended, so saving at 3am would bake the night colours in
+    // as the new theme's DAY column and the theme would come back wrong at noon.
+    theme[key] = VIEW_KEYS.has(key) ? view[key] : readAuthored(key);
+  }
+  // Deep-copied for the same reason armPhases copies: this bundle gets persisted and
+  // handed back to armPhases later, and it must not alias the live columns.
+  const phases = Object.entries(phaseColumns);
+  if (phases.length > 0) {
+    theme.phases = Object.fromEntries(phases.map(([phase, column]) => [phase, { ...column }]));
   }
   return theme;
 }
@@ -5022,18 +5070,252 @@ function mergeImportedThemes(data) {
   return incoming.length;
 }
 
+// ---------------------------------------------------------------------------
+// Time-of-day palette.
+//
+// A theme's `phases` block holds sparse columns — dawn, dusk, night — against the
+// theme's own daylit values, which are the implicit `day` column. The clock walks a
+// ring of keyframes and lerps between the two it currently sits between.
+//
+// Four stops rather than a day↔night pair because a two-ended lerp physically cannot
+// produce a golden hour: the midpoint of noon and midnight is a muddy grey-blue, not
+// a warm low sun. Dusk has to be its own authored column, sitting off the line
+// between the other two. Dawn is a separate column for the same reason and is
+// deliberately NOT dusk-in-reverse — dawn is cool and blue, dusk is warm and dusty.
+//
+// Nothing here touches the renderer directly. Every resolved value goes out through
+// the same applySetting/applyView the sliders use, so a blended key costs exactly
+// what dragging that key's control costs, and no apply case knows about time.
+//
+// `dayBase` is the source of truth for the day column, NOT `settings`: applySetting
+// writes resolved values back into settings, so settings[key] holds whatever the
+// clock last computed. Reading day out of there would let each blend drift off the
+// result of the previous one.
+// ---------------------------------------------------------------------------
+
+// The keyframe ring, in clock order — roughly a late-spring NYC day. A phase named
+// twice holds a plateau between those times, which is the whole trick for keeping
+// midday and the small hours settled: without the pair, noon would be the only
+// moment that is actually the theme's authored look, and the palette would creep all
+// afternoon. The 21:45 → 03:30 segment is night→night, so it spans midnight flat.
+const PHASE_RING = [
+  { phase: 'night', at: 3 * 60 + 30 },
+  { phase: 'dawn', at: 6 * 60 + 15 },
+  { phase: 'day', at: 9 * 60 },
+  { phase: 'day', at: 17 * 60 },
+  { phase: 'dusk', at: 19 * 60 + 30 },
+  { phase: 'night', at: 21 * 60 + 45 },
+];
+
+const MINUTES_PER_DAY = 1440;
+
+// Re-blending is only as cheap as its most expensive key, and clay's columns move
+// both envColor (a PMREM rebuild) and buildingColor (a full vertex re-bake). At 60fps
+// a slider drag would fire those every frame; quantising to 2% steps caps a whole ramp
+// at ~50 rebuilds however slowly it's scrubbed. The step is far finer than the eye can
+// resolve on a colour ramp, so nothing visibly stairsteps.
+const BLEND_STEP = 0.02;
+
+const dayBase = {};
+let phaseColumns = {};
+let blendKeys = new Set();
+let lastSegment = '';
+let lastBlend = -1;
+
+const blendFrom = new THREE.Color();
+const blendTo = new THREE.Color();
+
+const smoothstep01 = (x) => x * x * (3 - 2 * x);
+
+// Where the clock sits on the ring: the two phases it's between, and how far across.
+function ringPosition(minutes) {
+  let index = -1;
+  for (let i = 0; i < PHASE_RING.length; i += 1) {
+    if (PHASE_RING[i].at <= minutes) index = i;
+  }
+  // Before the first stop means we're inside the segment that wraps midnight — the
+  // one running from the last stop of the day to the first of the next.
+  const from = index === -1 ? PHASE_RING[PHASE_RING.length - 1] : PHASE_RING[index];
+  const to = index === -1 ? PHASE_RING[0] : PHASE_RING[(index + 1) % PHASE_RING.length];
+
+  let span = to.at - from.at;
+  if (span <= 0) span += MINUTES_PER_DAY; // the wrap segment
+  let into = minutes - from.at;
+  if (into < 0) into += MINUTES_PER_DAY;
+
+  return { from: from.phase, to: to.phase, t: smoothstep01(Math.min(1, into / span)) };
+}
+
+// A column only names the keys it actually moves; everything it omits sits at the
+// day value. That's what lets dusk restate four keys without having to repeat the
+// dozen it leaves alone.
+function phaseValue(phase, key) {
+  if (phase === 'day') return dayBase[key];
+  const column = phaseColumns[phase];
+  return column && key in column ? column[key] : dayBase[key];
+}
+
+// Colours lerp in the linear working space THREE.Color decodes into, which is where
+// mixing two lights is physically meaningful — sRGB hex would mix through a muddy
+// midpoint. Numbers lerp plainly. Anything else (a bool, a decay enum) has no
+// midpoint to speak of, so it snaps at the halfway mark rather than pretending.
+function mixValue(from, to, t) {
+  if (typeof from === 'number') return from + (to - from) * t;
+  if (typeof from === 'string' && from.startsWith('#')) {
+    blendFrom.set(from);
+    blendTo.set(to);
+    return `#${blendFrom.lerp(blendTo, t).getHexString()}`;
+  }
+  return t < 0.5 ? from : to;
+}
+
+// Capture the day column when a theme lands. Called with the values applyTheme just
+// pushed, so a saved/custom theme arms itself the same way — and one carrying no
+// `phases` at all ends up with an empty blendKeys and never blends.
+function armPhases(theme, values) {
+  // Copied, not referenced: the panel's phase cells write straight into these columns,
+  // and themePhases hands back the object the theme module exports. Editing that would
+  // rewrite the built-in theme in memory for the rest of the session — "Reset to
+  // defaults" would restore the edits it was supposed to discard, and switching away
+  // and back wouldn't clear them either.
+  phaseColumns = Object.fromEntries(
+    Object.entries(themePhases(theme)).map(([phase, column]) => [phase, { ...column }]),
+  );
+  blendKeys = new Set(Object.values(phaseColumns).flatMap((column) => Object.keys(column)));
+  for (const key of Object.keys(dayBase)) delete dayBase[key];
+  for (const key of blendKeys) dayBase[key] = values[key];
+  lastSegment = '';
+  lastBlend = -1; // force the next blend past the quantiser
+  applyPhaseBlend();
+}
+
+function applyPhaseBlend() {
+  if (blendKeys.size === 0) return;
+
+  const { from, to, t } = ringPosition(settings.timeOfDay);
+  // Settled phases must land *exactly*, not within a quantiser step: noon has to be
+  // the theme's authored values to the hex, or the file and the screen disagree and
+  // every colour tweak is judged against a slightly-off render. Only mid-ramp gets
+  // quantised, and there the deltas accumulate against the last *applied* t, so a
+  // step finer than BLEND_STEP is deferred, never dropped. Crossing into a new
+  // segment always applies — its endpoints are a different pair of columns.
+  const segment = `${from}>${to}`;
+  if (segment === lastSegment) {
+    // A plateau lerps a column against itself: t moves but every resolved value is
+    // identical, so re-applying is pure waste — and not cheap waste, since scrubbing
+    // 09:00→17:00 would rebuild the PMREM and re-bake the facades ~50 times to arrive
+    // back at the same colours. Applying once on entry is the whole segment.
+    if (from === to) return;
+    const settled = t === 0 || t === 1;
+    if (settled ? t === lastBlend : Math.abs(t - lastBlend) < BLEND_STEP) return;
+  }
+  lastSegment = segment;
+  lastBlend = t;
+
+  for (const key of blendKeys) {
+    if (dayBase[key] === undefined) continue; // a column names a key the theme doesn't set
+    const resolved = mixValue(phaseValue(from, key), phaseValue(to, key), t);
+    if (VIEW_KEYS.has(key)) applyView(key, resolved);
+    else applySetting(key, resolved);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sun arc.
+//
+// The key light rises on one side of the city and sets on the other, on the same clock
+// the palette runs on: it touches the horizon exactly when the ring reaches its dawn
+// and dusk columns, so the angle of the light and the colour of it agree about what
+// time it is. Sitting next to the ring for that reason — they share a clock, and moving
+// one without the other puts a high sun over a midnight palette.
+//
+// Solar noon is pinned to where the sun was nailed before this existed — 48° up on a
+// 146° bearing — so midday still renders as the city every theme was tuned against, and
+// the arc only adds the hours the app never had.
+//
+// The position is physical, not a look, so it is deliberately not themeable: a theme
+// says what the light is *like*, the clock says where it *is*.
+// ---------------------------------------------------------------------------
+
+const SUN_RISE = 6 * 60 + 15;   // the ring's dawn peak
+const SUN_SET = 19 * 60 + 30;   // the ring's dusk peak
+
+// Spherical form of the original sun.position (-300, 400, 200), so noon is unchanged.
+const SUN_RADIUS = 538.5;
+const SUN_NOON_ELEVATION = THREE.MathUtils.degToRad(48);
+const SUN_NOON_BEARING = THREE.MathUtils.degToRad(146.3);
+
+// Overnight the light holds a shallow angle and keeps going round instead of dropping
+// under the ground plane — a key light below the floor lights every facade from beneath,
+// which no amount of dimming rescues. Held low and carried to the far side, then dimmed
+// and cooled to moonlight by the night column, it reads as the moon and lands opposite
+// where the sun set.
+const SUN_NIGHT_ELEVATION = THREE.MathUtils.degToRad(11);
+
+// Re-baking the shadow map is the real cost of a moving sun — a full depth pass over the
+// merged city, and the reason the map was frozen in the first place. It has to happen
+// whenever the sun turns, or the shadows keep pointing where the light used to be. Under
+// this much rotation the shadows haven't visibly disagreed yet, so a slow scrub coasts on
+// the bake it already has instead of paying for one every frame.
+const SUN_SHADOW_STEP = THREE.MathUtils.degToRad(1.5);
+
+let lastShadowBearing = Infinity;
+
+// Azimuth 0 = due east of the arc, π = due west; elevation is above the horizon.
+function sunArc(minutes) {
+  const dayLength = SUN_SET - SUN_RISE;
+
+  if (minutes >= SUN_RISE && minutes < SUN_SET) {
+    const p = (minutes - SUN_RISE) / dayLength;
+    return {
+      azimuth: Math.PI * p, // east → west, over the top
+      // A sine, so it eases into its high point at solar noon rather than driving
+      // straight at it — the light slows down at midday the way the real one does.
+      elevation: SUN_NIGHT_ELEVATION
+        + (SUN_NOON_ELEVATION - SUN_NIGHT_ELEVATION) * Math.sin(Math.PI * p),
+    };
+  }
+
+  // The other half of the circle, walked at the night's own pace so the two ends meet:
+  // the nights here are shorter than the days, so this half turns faster.
+  let into = minutes - SUN_SET;
+  if (into < 0) into += MINUTES_PER_DAY;
+  const p = into / (MINUTES_PER_DAY - dayLength);
+  return { azimuth: Math.PI + Math.PI * p, elevation: SUN_NIGHT_ELEVATION };
+}
+
+function updateSun() {
+  const { azimuth, elevation } = sunArc(settings.timeOfDay);
+  // The arc's azimuth is rotated so its midpoint lands on the original bearing.
+  const bearing = azimuth + (SUN_NOON_BEARING - Math.PI / 2);
+  const ground = SUN_RADIUS * Math.cos(elevation);
+  sun.position.set(
+    ground * Math.cos(bearing),
+    SUN_RADIUS * Math.sin(elevation),
+    ground * Math.sin(bearing),
+  );
+
+  if (Math.abs(bearing - lastShadowBearing) < SUN_SHADOW_STEP) return;
+  lastShadowBearing = bearing;
+  renderer.shadowMap.needsUpdate = true; // three resets this to false once it has rendered
+}
+
 function applyTheme(id) {
   const theme = resolveTheme(id);
   if (!theme) return;
 
   settings.theme = id;
-  for (const [key, value] of Object.entries(themeValues(theme))) {
+  const values = themeValues(theme);
+  for (const [key, value] of Object.entries(values)) {
     // Camera-motion keys belong to `view`/applyView; everything else is a look
     // setting on `settings`/applySetting. Splitting here is what lets a single
     // theme bundle drive both panels.
     if (VIEW_KEYS.has(key)) applyView(key, value);
     else applySetting(key, value);
   }
+  // The loop above just wrote the theme's daylit values; re-read them as the day
+  // baseline and let the clock pull them toward night before the frame is drawn.
+  armPhases(theme, values);
 }
 
 // The buttons are built from the bundles rather than written out in the markup,
@@ -5043,12 +5325,20 @@ function applyTheme(id) {
 // chevrons. The cards differ only in what state they own and what applying a key
 // means, so those two are the arguments — the rest would otherwise be a second copy
 // drifting out of step with the first.
-function wirePanel(panel, state, apply) {
-  const inputs = [...panel.querySelectorAll('[data-setting]')];
+//
+// `read` exists because `state` stopped being the whole truth: a phased key's entry in
+// `settings` is the blended value the clock last computed, so the Day cell has to read
+// its authored value from somewhere else (see setupControls). Defaults to plain state
+// lookup, which is what the camera card still wants.
+//
+// The :not([data-phase]) is load-bearing — phase cells carry data-setting too (it names
+// the key they edit), and without this they'd be wired up as if they were Day controls.
+function wirePanel(panel, state, apply, read = (key) => state[key]) {
+  const inputs = [...panel.querySelectorAll('[data-setting]:not([data-phase])')];
 
   const syncInput = (input) => {
     const key = input.dataset.setting;
-    const value = state[key];
+    const value = read(key);
 
     if (input.type === 'checkbox') input.checked = value;
     else input.value = value;
@@ -5060,8 +5350,24 @@ function wirePanel(panel, state, apply) {
       input.style.setProperty('--pct', `${pct}%`);
     }
 
+    // The readout shows the LIVE value, the handle shows the day value. For a phased key
+    // these differ once the clock leaves midday — `read` gives the authored day value the
+    // handle edits, `state[key]` is what the blend has actually put on screen right now.
+    // syncLiveReadouts refreshes just this number as the clock moves.
     const readout = panel.querySelector(`[data-value="${key}"]`);
-    if (readout) readout.textContent = Number(value).toFixed(2);
+    if (readout) readout.textContent = Number(blendKeys.has(key) ? state[key] : value).toFixed(2);
+  };
+
+  // The clock changes a phased key's live value without any input event firing, so the
+  // readouts would otherwise sit at their last-synced number. This repaints only the
+  // blended readouts (the handles and everything else are unaffected by time).
+  const syncLiveReadouts = () => {
+    for (const input of inputs) {
+      const key = input.dataset.setting;
+      if (!blendKeys.has(key)) continue;
+      const readout = panel.querySelector(`[data-value="${key}"]`);
+      if (readout) readout.textContent = Number(state[key]).toFixed(2);
+    }
   };
 
   for (const input of inputs) {
@@ -5105,7 +5411,7 @@ function wirePanel(panel, state, apply) {
     if (collapseButton) collapseButton.addEventListener('click', collapse);
   }
 
-  return { syncInputs: () => inputs.forEach(syncInput) };
+  return { syncInputs: () => inputs.forEach(syncInput), syncLiveReadouts };
 }
 
 // Builds the save-theme dialog once: fills the swatch grid, tracks the chosen colour
@@ -5169,18 +5475,109 @@ function setupSaveThemeDialog(onSaved) {
   };
 }
 
+// A [data-setting] control on the look panel edits the DAY column. For a phased key
+// that means retargeting `dayBase` — `settings` alone isn't enough, because the next
+// blend recomputes from `dayBase` and would quietly revert the edit.
+function applySettingFromPanel(key, value) {
+  if (blendKeys.has(key)) {
+    dayBase[key] = value;
+    applySetting(key, value);
+    reblend();
+    return;
+  }
+  applySetting(key, value);
+}
+
+// Re-run the blend after an authored value changed underneath it. The quantiser caches
+// the last t it applied, and t hasn't moved — the columns did — so it has to be reset
+// or the edit doesn't reach the screen until the clock next ticks.
+function reblend() {
+  lastSegment = '';
+  lastBlend = -1;
+  applyPhaseBlend();
+}
+
+// The Day cell of a phased row must show the theme's authored value, not settings[key]
+// — that holds whatever the clock last resolved, so at 3am every Day swatch would show
+// the night colour and dragging one would "edit" from a value that was never authored.
+const readAuthored = (key) => (blendKeys.has(key) && dayBase[key] !== undefined
+  ? dayBase[key]
+  : settings[key]);
+
+// The Dawn/Dusk/Night cells. Each carries data-phase plus the data-setting naming the
+// key it edits, and writes straight into that phase's column.
+function wirePhaseCells(panel) {
+  const cells = [...panel.querySelectorAll('[data-phase][data-setting]')];
+
+  const syncCells = () => {
+    for (const cell of cells) {
+      const { phase, setting } = cell.dataset;
+      const column = phaseColumns[phase];
+      // A column that doesn't name this key inherits the day value. Showing that
+      // inherited value is honest — it's what the blend will actually use — though it
+      // does mean the cell looks "set" when it isn't. Marking inherit-vs-override in
+      // the UI is the next thing this wants.
+      const value = column && setting in column ? column[setting] : readAuthored(setting);
+      if (value === undefined) continue;
+      cell.value = cell.type === 'number' ? Number(value).toFixed(2) : value;
+    }
+  };
+
+  for (const cell of cells) {
+    cell.addEventListener('input', () => {
+      const { phase, setting } = cell.dataset;
+      if (!phaseColumns[phase]) phaseColumns[phase] = {};
+
+      let value;
+      if (cell.type === 'number') {
+        value = parseFloat(cell.value);
+        if (!Number.isFinite(value)) return; // mid-typing ("", "-", "1.") — wait for a number
+      } else {
+        value = cell.value;
+      }
+
+      phaseColumns[phase][setting] = value;
+      // Editing a cell for a key no column named before makes it phased from now on.
+      blendKeys.add(setting);
+      if (dayBase[setting] === undefined) dayBase[setting] = settings[setting];
+      reblend();
+    });
+  }
+
+  return { syncCells };
+}
+
 function setupControls() {
   const panel = document.querySelector('#panel');
   const themeRow = panel.querySelector('.themes');
-  const { syncInputs } = wirePanel(panel, settings, applySetting);
+  const { syncInputs, syncLiveReadouts } = wirePanel(panel, settings, applySettingFromPanel, readAuthored);
+  const { syncCells } = wirePhaseCells(panel);
+  syncLookReadouts = syncLiveReadouts;
 
   // The scene reads `settings` as it builds, but the panel chrome only changes when
   // applySetting writes the CSS properties — which nothing does on a cold load. Push
   // them once here so the stylesheet's starting values can't outlive the theme file.
   for (const key of UI_STYLE_KEYS) applySetting(key, settings[key]);
 
+  // Same gap, same fix: applyTheme is what normally arms the blend, and it doesn't
+  // run on a cold load. Arming here — before init() builds the city — is deliberate:
+  // the blend resolves into `settings`, and the building palette bakes itself from
+  // `settings` the moment the mesh exists, so opening the page at 2am builds a city
+  // that is already night rather than one that flips a frame later.
+  const startTheme = resolveTheme(settings.theme) ?? DEFAULT_THEME;
+  armPhases(startTheme, themeValues(startTheme));
+
+  // Same reason, and it has to be before init(): the shadow map is baked once the
+  // buildings land, and it bakes whatever direction the sun is pointing at that moment.
+  // Placing the sun after that would leave the city's shadows cast from wherever the
+  // light happened to start.
+  updateSun();
+
   const syncAll = () => {
     syncInputs();
+    // The phase columns change wholesale on a theme switch, so their cells resync
+    // with everything else.
+    syncCells();
     // A theme can now move camera-motion settings too, so the Camera panel's
     // sliders have to be brought back into step alongside this one.
     syncCameraPanel();

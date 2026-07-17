@@ -17,7 +17,7 @@ export default {
   uiButton: '#a67a53',
 
   // Image — tone mapping and the post-process passes.
-  exposure: 1.11, contrast: 1.00, bloom: 0.55,
+  exposure: 1.51, contrast: 1.50, bloom: 0.12,
   depthOfField: true, dofStrength: 0.45,
 
   // Taxi trails — the glowing road heat. `trailOpacity` is the trail-glow strength.
@@ -29,15 +29,17 @@ export default {
   // waterTintStrength 0 leaves the river on its floor colour; raise it (0..1) to wash
   // the water toward waterTint.
   envColor: '#fff6ef', envIntensity: 1.6,
-  background: '#2b2e36', groundColor: '#50452b',
+  background: '#a3afcc', groundColor: '#50452b',
+  // Asphalt reflection: how much sky the wet-looking streets throw back, and how sharp.
+  floorReflection: 0.70, floorRoughness: 0.42,
   waterTint: '#2f6f7f', waterTintStrength: 0.09,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
-  fog: false, fogColor: '#ffffff', fogOpacity: 0.1, fogStrength: 0.03, fogNoise: 0.67,
+  fog: false, fogColor: '#ffffff', fogOpacity: 0.02, fogStrength: 0.03, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
   sunColor: '#e1d6cb', sunIntensity: 2.48,
-  skyLight: '#3c4458', groundLight: '#4a2410',
+  skyLight: '#a3afcc', groundLight: '#4a2410',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.
@@ -59,4 +61,70 @@ export default {
   // personal preference, so it isn't carried here.
   orbitSpeed: 1.00, panSpeed: 1.00, zoomSpeed: 1.00, damping: 0.06,
   autoOrbit: false, autoOrbitSpeed: 0.35,
+
+  // Time-of-day columns. Everything above is the daylit city — the implicit `day`
+  // column — and each block below restates only the keys that move, against it.
+  //
+  // Only things that genuinely read as time-of-day are here. The trails, the facade
+  // variation and the whole panel chrome are the theme's identity and hold still
+  // around the clock. The sodium trails not changing is the point: they're the one
+  // thing that IS the same at 3am, and holding them fixed while the city drops away
+  // around them is what makes them look like they're finally doing the lighting.
+  phases: {
+    // Dawn — cool and clean. Deliberately not dusk played backwards: morning air is
+    // clear, so the light is blue and the shadows are hard. The warmth is only in the
+    // sun itself, not yet in the air around it.
+    dawn: {
+      sunColor: '#ffc9a0', sunIntensity: 0.95,
+      exposure: 1.18, contrast: 1.00, bloom: 0.55,
+      skyLight: '#2e4468', groundLight: '#3a2a1e',
+      background: '#1d2735',
+      groundColor: '#3a3423',
+      envColor: '#9fc0e8', envIntensity: 1.10,
+      buildingColor: '#35342f',
+    },
+
+    // Dusk — the golden hour, and the whole reason for a four-stop ring: this column
+    // sits well off the straight line between noon and midnight, so no day↔night lerp
+    // could ever pass through it. Low sun, violet sky opposite it, and a warm bounce
+    // off streets that have been in the sun all day.
+    //
+    // Amber, not orange. Three warm sources stack multiplicatively on a facade here —
+    // the key light, the bounce off the street, and the env dome wrapping the whole
+    // thing — so each one only has to be mildly saturated before the result reads as
+    // hard copper. The trick is that the *hue* sells the hour and the saturation is
+    // what overcooks it: these sit around 30–40° with the chroma held well back, and
+    // the env dome carries most of the warmth because it's the softest of the three.
+    dusk: {
+      sunColor: '#ffc188', sunIntensity: 1.05,
+      exposure: 1.14, contrast: 1.00, bloom: 0.55,
+      // The sky half stays a cool violet — that opposition to the warm key is what
+      // makes it read as low evening sun rather than a global orange wash.
+      skyLight: '#46425f', groundLight: '#69543e',
+      background: '#937347',
+      groundColor: '#4a4030',
+      envColor: '#e3bb98', envIntensity: 1.12,
+      // Barely off the day value: the facades should be *lit* warm, not *painted* warm.
+      buildingColor: '#454039',
+    },
+
+    // Night — the city gets out of the way of the trails.
+    night: {
+      // The sun becomes a moon: dim, and cool enough to read as a different light
+      // rather than a turned-down version of the same one.
+      sunColor: '#9fb0d8', sunIntensity: 0.42,
+      // Open the exposure back up a little so night is moody rather than unreadable.
+      exposure: 1.24, contrast: 1.00, bloom: 0.55,
+      // The sky half of the hemisphere goes deep blue; the bounce off the street keeps
+      // a trace of sodium, because at night that bounce is coming from the trails.
+      skyLight: '#161b2b', groundLight: '#2a1408',
+      background: '#20232c',
+      groundColor: '#231d13',
+      // Reflections stop being a bright overcast dome and become a dim blue one.
+      envColor: '#2b3a5c', envIntensity: 0.85,
+      // Facades fall toward their own shadow. Kept a hair above black so the edge
+      // lines and the sheen still have something to sit on.
+      buildingColor: '#a09792',
+    },
+  },
 };

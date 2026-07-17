@@ -34,6 +34,7 @@ export default {
   // again. A "correct" navy like #0c1a3a lands on near-black on screen.
   envColor: '#44587e', envIntensity: 1.8,
   background: '#466090', groundColor: '#7b889d',
+  floorReflection: 0.79, floorRoughness: 0.42,
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
   waterTint: '#3a6fd0', waterTintStrength: 0.0,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
