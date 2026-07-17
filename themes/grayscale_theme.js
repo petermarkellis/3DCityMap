@@ -27,16 +27,16 @@ export default {
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#9aa4b0', envIntensity: 2.5,
-  background: '#83838e', groundColor: '#494f55',
+  background: '#8585a2', groundColor: '#494f55',
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
-  waterTint: '#404a54', waterTintStrength: 0.7,
+  waterTint: '#6b6b85', waterTintStrength: 0.7,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
   fog: false, fogColor: '#ffffff', fogOpacity: 0.03, fogStrength: 0.06, fogNoise: 0.67,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
-  sunColor: '#e8ecf2', sunIntensity: 2.59,
-  skyLight: '#87879b', groundLight: '#2b2e33',
+  sunColor: '#e8ecf2', sunIntensity: 1.06,
+  skyLight: '#6c6c7f', groundLight: '#2b2e33',
 
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.

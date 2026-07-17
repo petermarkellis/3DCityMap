@@ -229,19 +229,46 @@ function applyView(key, value) {
 
 // Reset view flies the camera home rather than snapping: a cubic ease-out so it sets
 // off promptly and glides to a stop at the home framing.
-const RESET_DURATION = 1.1; // seconds
+const RESET_DURATION = 1.54; // seconds (40% slower glide)
 const easeOutCubic = (k) => 1 - Math.pow(1 - k, 3);
 let resetTween = null;
 
-function resetView() {
+// Ease the camera to a framing (position + look target); the tween owns the camera
+// until it lands (see updateResetTween).
+function flyToView(toPos, toTarget) {
   resetTween = {
     fromPos: camera.position.clone(),
-    toPos: HOME_VIEW.position.clone(),
+    toPos: toPos.clone(),
     fromTarget: controls.target.clone(),
-    toTarget: HOME_VIEW.target.clone(),
+    toTarget: toTarget.clone(),
     elapsed: 0,
   };
-  controls.enabled = false; // the tween owns the camera until it lands
+  controls.enabled = false;
+}
+
+// The framed camera presets for the Camera panel's View dropdown. `side` is derived from
+// the sun so the light always sits in front of the camera; both are static framings the
+// user can then free-roam away from (which drops the dropdown back to Custom).
+function cameraPreset(name) {
+  if (name === 'aerial') {
+    // High and nearly straight down — the city read as a plan, ~60% zoomed out, with the
+    // grid turned 45° (the offset rotated in the XZ plane) so it reads on the diagonal.
+    return { position: new THREE.Vector3(63.6, 900, 63.6), target: new THREE.Vector3(0, 0, 0) };
+  }
+  if (name === 'side') {
+    // Opposite the sun horizontally so it faces the camera, lifted and angled down.
+    const horiz = new THREE.Vector3(-sun.position.x, 0, -sun.position.z);
+    if (horiz.lengthSq() < 1e-4) horiz.set(1, 0, 0);
+    horiz.normalize().multiplyScalar(390);
+    return { position: new THREE.Vector3(horiz.x, 205, horiz.z), target: new THREE.Vector3(0, 15, 0) };
+  }
+  return null; // custom / free-roam
+}
+
+function resetView() {
+  const sel = document.querySelector('#view-preset');
+  if (sel) sel.value = 'custom'; // home is the free-roam framing
+  flyToView(HOME_VIEW.position, HOME_VIEW.target);
 }
 
 // Advance the fly-home one frame. Returns true while running so the loop can skip
@@ -5137,6 +5164,17 @@ function setupCamera() {
   // "Reset view" flies the camera home; it deliberately leaves the speeds and the
   // drag mode alone, because those are how you like to fly, not where you are.
   panel.querySelector('#nav-reset').addEventListener('click', resetView);
+
+  // View preset dropdown: pick a framing and the camera eases to it. Any manual camera
+  // interaction (drag, pan, zoom — OrbitControls' 'start') drops it back to Custom.
+  const viewPreset = panel.querySelector('#view-preset');
+  if (viewPreset) {
+    viewPreset.addEventListener('change', () => {
+      const preset = cameraPreset(viewPreset.value);
+      if (preset) flyToView(preset.position, preset.target);
+    });
+    controls.addEventListener('start', () => { viewPreset.value = 'custom'; });
+  }
 
   // Save grabs a JPG of the current view; the checkbox decides whether it's a 4K
   // offscreen render or the window-resolution frame.
