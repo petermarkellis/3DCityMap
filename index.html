@@ -779,6 +779,27 @@
         text-align: center;
       }
 
+      /* Per-scalar column captions: sit just above a phased slider's number boxes so it's
+         clear the slider is the Day value and each box is a phase, even when the section's
+         top header has scrolled away. */
+      .panel .phase-caps {
+        margin-top: 4px;
+        margin-bottom: 1px;
+        color: var(--muted);
+        font-size: 8px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .panel .phase-caps span {
+        text-align: center;
+      }
+
+      .panel .phase-caps .phase-caps-day {
+        text-align: left;
+        opacity: 0.8;
+      }
+
       /* The Day cell is the authored value the theme file carries; the rest are the
          phase columns. Same control, so they get the same 34px footprint. */
       .panel .phase-grid input[type="color"] {

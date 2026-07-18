@@ -5775,6 +5775,18 @@ function setupControls() {
   const { syncCells } = wirePhaseCells(panel);
   syncLookReadouts = syncLiveReadouts;
 
+  // Caption every phased scalar's number-box row so it reads unambiguously even when the
+  // section's top header has scrolled off: the full-width slider above is the Day value,
+  // and the three boxes are the phases. Done here rather than in markup so it stays one
+  // definition across all of them (Brightness, Contrast, Glow, Reflection, Haze, Floor…).
+  for (const row of panel.querySelectorAll('.phase-nums')) {
+    const caps = document.createElement('div');
+    caps.className = 'phase-grid phase-caps';
+    caps.innerHTML = '<span class="phase-caps-day">Day ↑ slider</span><span></span>'
+      + '<span>Dawn</span><span>Dusk</span><span>Night</span>';
+    row.before(caps);
+  }
+
   // The scene reads `settings` as it builds, but the panel chrome only changes when
   // applySetting writes the CSS properties — which nothing does on a cold load. Push
   // them once here so the stylesheet's starting values can't outlive the theme file.
