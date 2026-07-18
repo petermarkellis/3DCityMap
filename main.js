@@ -101,11 +101,11 @@ const loaderContinue = document.querySelector('#loader-continue');
 const scene = new THREE.Scene();
 // Seed the sky/fog from the default theme rather than a hardcoded colour, so a fresh
 // load looks the same as it does after a theme switch. (They used to differ: only
-// switching a theme ran applySetting('background'), so on first load the scene kept
+// switching a theme ran applySetting('skyColor'), so on first load the scene kept
 // this near-black while every theme actually carries its own — ember's is a deep
 // blue.) One source of truth = no more "the sky goes blue only after I switch".
-scene.background = new THREE.Color(DEFAULT_THEME.background);
-scene.fog = new THREE.FogExp2(DEFAULT_THEME.background, 0.0011);
+scene.background = new THREE.Color(DEFAULT_THEME.skyColor);
+scene.fog = new THREE.FogExp2(DEFAULT_THEME.skyColor, 0.0011);
 
 // Distance-fog "haze": the Haze slider scales this density (0.5 ≈ the original 0.0011),
 // and — because FogExp2 thickens with camera distance — the optional thin-with-zoom fade
@@ -4959,8 +4959,8 @@ function applySetting(key, value) {
     case 'edgeColor':
       if (edgeMaterial) edgeMaterial.color.set(value);
       break;
-    case 'background':
-      // Fog has to track the background or distant geometry fades toward a
+    case 'skyColor':
+      // Fog has to track the sky colour or distant geometry fades toward a
       // colour that isn't there, and the horizon shows a visible seam.
       scene.background.set(value);
       scene.fog.color.set(value);

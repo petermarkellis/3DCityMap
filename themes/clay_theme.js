@@ -29,12 +29,15 @@ export default {
   // waterTintStrength 0 leaves the river on its floor colour; raise it (0..1) to wash
   // the water toward waterTint.
   envColor: '#fff6ef', envIntensity: 1.6,
-  background: '#a3afcc', groundColor: '#50452b',
+  skyColor: '#a3afcc', groundColor: '#50452b',
   // Asphalt reflection: how much sky the wet-looking streets throw back, and how sharp.
   floorReflection: 0.70, floorRoughness: 0.42,
   waterTint: '#2f6f7f', waterTintStrength: 0.09,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
   fog: false, fogColor: '#ffffff', fogOpacity: 0.02, fogStrength: 0.03, fogNoise: 0.67,
+  // Distance haze — the far-fog wash. `hazeStrength` scales its density; `hazeFade` thins
+  // it as the camera pulls back so overviews stay clear.
+  hazeStrength: 0.34, hazeFade: true,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
@@ -78,7 +81,7 @@ export default {
       sunColor: '#ffc9a0', sunIntensity: 0.95,
       exposure: 1.18, contrast: 1.00, bloom: 0.55,
       skyLight: '#2e4468', groundLight: '#3a2a1e',
-      background: '#1d2735',
+      skyColor: '#1d2735',
       groundColor: '#3a3423',
       envColor: '#9fc0e8', envIntensity: 1.10,
       buildingColor: '#35342f',
@@ -101,7 +104,7 @@ export default {
       // The sky half stays a cool violet — that opposition to the warm key is what
       // makes it read as low evening sun rather than a global orange wash.
       skyLight: '#46425f', groundLight: '#69543e',
-      background: '#936547',
+      skyColor: '#936547',
       groundColor: '#4a4030',
       envColor: '#e1a6c1', envIntensity: 1.12,
       // Barely off the day value: the facades should be *lit* warm, not *painted* warm.
@@ -118,13 +121,14 @@ export default {
       // The sky half of the hemisphere goes deep blue; the bounce off the street keeps
       // a trace of sodium, because at night that bounce is coming from the trails.
       skyLight: '#161b2b', groundLight: '#2a1408',
-      background: '#20232c',
+      skyColor: '#20232c',
       groundColor: '#231d13',
       // Reflections stop being a bright overcast dome and become a dim blue one.
       envColor: '#2b3a5c', envIntensity: 0.85,
       // Facades fall toward their own shadow. Kept a hair above black so the edge
       // lines and the sheen still have something to sit on.
       buildingColor: '#a09792',
+      hazeStrength: 7, hazeFade: true,
     },
   },
 };

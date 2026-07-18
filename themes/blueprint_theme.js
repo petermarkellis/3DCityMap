@@ -29,16 +29,18 @@ export default {
   trailDecay: 'long', trailOpacity: 0.82,
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
-  // The background and ground hexes look absurdly bright in a colour picker, and
+  // The sky and ground hexes look absurdly bright in a colour picker, and
   // have to: they are sRGB, get decoded to linear, then ACES pulls them down
   // again. A "correct" navy like #0c1a3a lands on near-black on screen.
   envColor: '#44587e', envIntensity: 1.8,
-  background: '#466090', groundColor: '#7b889d',
+  skyColor: '#466090', groundColor: '#7b889d',
   floorReflection: 0.79, floorRoughness: 0.42,
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
   waterTint: '#3a6fd0', waterTintStrength: 0.0,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
   fog: false, fogColor: '#eaf1ff', fogOpacity: 0.28, fogStrength: 0.06, fogNoise: 0.67,
+  // Distance haze — `hazeStrength` scales the far-fog density, `hazeFade` thins it on zoom-out.
+  hazeStrength: 0.5, hazeFade: true,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.

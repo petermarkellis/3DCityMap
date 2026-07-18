@@ -27,12 +27,14 @@ export default {
 
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#9aa4b0', envIntensity: 2.5,
-  background: '#6a6a81', groundColor: '#494f55',
+  skyColor: '#6a6a81', groundColor: '#494f55',
   floorReflection: 1.10, floorRoughness: 0.42,
   // waterTintStrength 0 = off; raise it (0..1) to wash the water toward waterTint.
   waterTint: '#6b6b85', waterTintStrength: 0.7,
   // Ground fog — low-lying mist. `fog` enables it for this theme; the rest are its look.
   fog: false, fogColor: '#ffffff', fogOpacity: 0.03, fogStrength: 0.06, fogNoise: 0.67,
+  // Distance haze — `hazeStrength` scales the far-fog density, `hazeFade` thins it on zoom-out.
+  hazeStrength: 0.5, hazeFade: true,
 
   // Sun — the key directional light, plus the ambient hemisphere (sky/ground
   // halves). The hemisphere has no direct UI slider but travels with the theme.
