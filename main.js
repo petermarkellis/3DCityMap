@@ -791,16 +791,18 @@ const settings = {
   timeOfDay: wallClockMinutes(),
   liveTime: true,
   // Density heatmap — a live choropleth painted onto the buildings from where the
-  // fleets currently are. Two independent sources splat into one shared field, so
-  // ticking both gives a merged taxi+bike density. The on/off toggles are a view mode
-  // and stay out of the themes (switching palette shouldn't flip the layer), but the
-  // two tuning values below travel with the theme. `heatmapGain` is the sensitivity:
-  // how much traffic a cell needs before it reads as fully "hot". `heatmapIntensity` is
-  // how vivid the overlay reads once it's there — saturation plus how much of the
-  // building's base colour it covers — which lets it stand out on a muted theme. Both
-  // are fallbacks here; a theme carries its own.
+  // fleets currently are. Independent sources splat into one shared field, so ticking
+  // several gives a merged density. Taxis/bikes splat their live positions; crime splats
+  // its incident locations near the current hour (so the hotspots shift with the clock).
+  // The on/off toggles are a view mode and stay out of the themes (switching palette
+  // shouldn't flip the layer), but the two tuning values below travel with the theme.
+  // `heatmapGain` is the sensitivity: how much traffic a cell needs before it reads as
+  // fully "hot". `heatmapIntensity` is how vivid the overlay reads once it's there —
+  // saturation plus how much of the building's base colour it covers — which lets it
+  // stand out on a muted theme. Both are fallbacks here; a theme carries its own.
   heatmapTaxi: false,
   heatmapBike: false,
+  heatmapCrime: false,
   heatmapGain: 1.0,
   heatmapIntensity: 1.0,
   // Overlay data layers, also view modes kept out of the themes. Flows = origin→dropoff
@@ -3961,10 +3963,28 @@ function splatFleet(fleet, count, add) {
   }
 }
 
+// Splat crime incidents near the current hour into the grid. Static points rather than
+// moving agents, weighted so a crime right at the clock counts full and one ±window away
+// fades to nothing — so scrubbing the clock slides the hotspots the way it does the crime
+// overlay. Every point re-splats each tick, so (like a dwelling cab) a cell settles at ~its
+// weighted incident count, keeping crime in the same HEAT_REF units as the fleets.
+const CRIME_HEAT_WINDOW = 1.5; // ± hours
+function splatCrime(add) {
+  const pts = overlayPoints.crime;
+  if (!pts) return;
+  const hour = settings.timeOfDay / 60;
+  for (let i = 0; i < pts.count; i += 1) {
+    let d = Math.abs(pts.hours[i] - hour);
+    d = Math.min(d, 24 - d);
+    if (d >= CRIME_HEAT_WINDOW) continue;
+    heatSplat(pts.offsets[i * 3], pts.offsets[i * 3 + 2], add * (1 - d / CRIME_HEAT_WINDOW));
+  }
+}
+
 function updateHeatmap(dt) {
-  // The choropleth shows if either source is on; it splats whichever are ticked into
-  // one shared grid (so both = a merged taxi+bike density).
-  const anyOn = settings.heatmapTaxi || settings.heatmapBike;
+  // The choropleth shows if any source is on; it splats whichever are ticked into one
+  // shared grid (so several ticked = a merged density).
+  const anyOn = settings.heatmapTaxi || settings.heatmapBike || settings.heatmapCrime;
   const target = anyOn ? 1 : 0;
   heatStrength += (target - heatStrength) * Math.min(1, dt * 6);
   const shader = buildingMaterial && buildingMaterial.userData.shader;
@@ -3990,6 +4010,7 @@ function updateHeatmap(dt) {
   const add = 1 - decay;
   if (settings.heatmapTaxi) splatFleet(taxis, activeTaxis, add);
   if (settings.heatmapBike) splatFleet(bikes, activeBikes, add);
+  if (settings.heatmapCrime) splatCrime(add);
   heatTexture.needsUpdate = true;
 }
 
@@ -4336,6 +4357,10 @@ function histFromHours(hours) {
   return hist;
 }
 
+// Per-point positions + hours for the datasets the density heatmap can splat (crime).
+// Kept on the CPU when the layer builds, since the density field is binned CPU-side.
+const overlayPoints = {};
+
 // Per-category on/off, for the checkboxes that let a layer show only some of its classes
 // (crime by legal class, collisions by severity). Six enable uniforms — a ternary chain
 // reads the instance's category, GLSL1-safe exactly like the colour pick — default on, or
@@ -4575,6 +4600,7 @@ function buildMarkerLayer(rows, config) {
   mesh.frustumCulled = false;
   mesh.renderOrder = cfg.renderOrder;
   overlayHourly[cfg.keys.visible] = histFromHours(hours);
+  overlayPoints[cfg.keys.visible] = { offsets: new Float32Array(offsets), hours: new Float32Array(hours), count };
   return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
