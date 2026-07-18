@@ -488,7 +488,8 @@ let tlBody = null;
 let tlSvg = null;
 let tlTip = null;
 let tlToggle = null;
-let tlData = null;            // { taxi[24], bike[24], taxiRaw[24], bikeRaw[24], hasTaxi, hasBike }
+let tlData = null;            // { series: [{ key, label, color, dash, raw[24], norm[24], hidden }] }
+const tlHidden = new Set();  // series keys the user has clicked off in the legend (chart-only)
 const tlDims = { w: 0, h: 0 };
 let tlPlayhead = null;
 let tlPlayLabel = null;
@@ -536,30 +537,35 @@ const TL_TRACK_KEYS = new Set(TL_OVERLAYS.map((o) => o.key));
 function tlFleetSeries() {
   const out = [];
   if (demandModel && demandModel.byHour) {
-    out.push({ label: 'Taxis', color: TL_TAXI, raw: Array.from({ length: 24 }, (_, h) => demandModel.byHour[h].length) });
+    out.push({ key: 'taxis', label: 'Taxis', color: TL_TAXI, raw: Array.from({ length: 24 }, (_, h) => demandModel.byHour[h].length) });
   }
   if (bikeDemand && bikeDemand.byHour) {
-    out.push({ label: 'Bikes', color: TL_BIKE, raw: Array.from({ length: 24 }, (_, h) => bikeDemand.byHour[h].length) });
+    out.push({ key: 'bikes', label: 'Bikes', color: TL_BIKE, raw: Array.from({ length: 24 }, (_, h) => bikeDemand.byHour[h].length) });
   }
   return out;
 }
 
-// Choose what the chart shows: any point-overlay that's toggled on (so the curve matches
-// what you're looking at on the map), or the fleets when none is. Each series is normalised
-// to its own daily peak; the raw counts ride along for the hover tooltip. Safe before data
-// lands — an empty series just doesn't draw.
+// Everything active is drawn at once: the fleets are always the base (solid), and each
+// toggled-on point-overlay adds a dashed curve on top — so the graph shows all the layers
+// you're looking at. Fleets and overlays are two internally CVD-safe palettes; the dashed
+// vs solid line is the secondary encoding that separates a fleet from an overlay whose hue
+// sits near it. Each series is normalised to its own daily peak; raw counts ride along for
+// the hover tooltip. Safe before data lands — an empty series just doesn't draw.
 function refreshTimeline() {
-  const overlays = TL_OVERLAYS
-    .filter((o) => settings[o.key] && overlayHourly[o.key] && overlayHourly[o.key].some((v) => v > 0))
-    .map((o) => ({ label: o.label, color: o.color, raw: Array.from(overlayHourly[o.key]) }));
-  const chosen = overlays.length > 0 ? overlays : tlFleetSeries();
+  // Fleets are chart-only (they don't leave the map), so their "off" is the legend-hidden
+  // set. Every overlay that has data is always listed too — struck through when its layer
+  // is off — so it can be switched on right from the legend instead of hunting through the
+  // control panel. Its "off" is the real layer toggle (settings[key]).
+  const series = tlFleetSeries().map((s) => ({ ...s, dash: false, off: tlHidden.has(s.key) }));
+  for (const o of TL_OVERLAYS) {
+    if (!overlayHourly[o.key] || !overlayHourly[o.key].some((v) => v > 0)) continue;
+    series.push({ key: o.key, label: o.label, color: o.color, dash: true, off: !settings[o.key], raw: Array.from(overlayHourly[o.key]) });
+  }
   tlData = {
-    series: chosen
-      .filter((s) => s.raw.some((v) => v > 0))
-      .map((s) => {
-        const peak = Math.max(1, ...s.raw);
-        return { ...s, norm: s.raw.map((v) => v / peak) };
-      }),
+    series: series.map((s) => {
+      const peak = Math.max(1, ...s.raw);
+      return { ...s, norm: s.raw.map((v) => v / peak) };
+    }),
   };
   updateTimelineLegend();
   drawTimeline();
@@ -571,7 +577,8 @@ function updateTimelineLegend() {
   const legend = tlEl && tlEl.querySelector('.timeline-legend');
   if (!legend) return;
   legend.innerHTML = (tlData ? tlData.series : [])
-    .map((s) => `<span><i style="--k:${s.color}"></i>${s.label}</span>`)
+    .map((s) => `<span data-key="${s.key}" class="${s.off ? 'is-off' : ''}" role="button" tabindex="0" title="Click to toggle">`
+      + `<i class="${s.dash ? 'dash' : ''}" style="--k:${s.color}"></i>${s.label}</span>`)
     .join('');
 }
 
@@ -604,10 +611,13 @@ function drawTimeline() {
     tlSvg.appendChild(t);
   } else {
     for (const s of tlData.series) {
-      tlSvg.appendChild(svgEl('path', {
+      if (s.off) continue; // fleet hidden from the legend, or overlay layer off
+      const attrs = {
         d: tlSmooth(s.norm), fill: 'none', stroke: s.color, 'stroke-width': 2,
         'stroke-linecap': 'round', 'stroke-linejoin': 'round',
-      }));
+      };
+      if (s.dash) attrs['stroke-dasharray'] = '5 4';
+      tlSvg.appendChild(svgEl('path', attrs));
     }
   }
 
@@ -658,6 +668,30 @@ function setupTimeline() {
     if (!tlEl.classList.contains('is-min')) drawTimeline();
   });
 
+  // Clickable legend. An overlay entry drives its real panel checkbox (so the map layer and
+  // the chart toggle together, and the two stay in sync); a fleet entry is chart-only, since
+  // the fleets always run — hiding one just declutters the graph. Delegated, since the
+  // legend is rebuilt each refresh.
+  const toggleSeries = (key) => {
+    if (TL_TRACK_KEYS.has(key)) {
+      const cb = document.querySelector(`#panel [data-setting="${key}"]`);
+      if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('input', { bubbles: true })); }
+    } else {
+      if (tlHidden.has(key)) tlHidden.delete(key); else tlHidden.add(key);
+      refreshTimeline();
+    }
+  };
+  const legend = tlEl.querySelector('.timeline-legend');
+  legend.addEventListener('click', (event) => {
+    const span = event.target.closest('[data-key]');
+    if (span) toggleSeries(span.dataset.key);
+  });
+  legend.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const span = event.target.closest('[data-key]');
+    if (span) { event.preventDefault(); toggleSeries(span.dataset.key); }
+  });
+
   // Redraw when the strip changes size — window resize, or the first reveal out of
   // display:none (which is when it first gets a real width to draw into).
   new ResizeObserver(() => drawTimeline()).observe(tlBody);
@@ -680,7 +714,7 @@ function setupTimeline() {
     tlCrosshair.setAttribute('x2', x);
     tlCrosshair.setAttribute('visibility', 'visible');
     tlTip.innerHTML = `<strong>${formatClock(h * 60)}</strong>`
-      + tlData.series.map((s) => ` · <b style="color:${s.color}">${s.raw[h]}</b> ${s.label}`).join('');
+      + tlData.series.filter((s) => !s.off).map((s) => ` · <b style="color:${s.color}">${s.raw[h]}</b> ${s.label}`).join('');
     // Under the pointer, relative to the body — clamped so it never spills past the edges.
     const bodyRect = tlBody.getBoundingClientRect();
     const px = Math.min(Math.max(clientX - bodyRect.left, 70), bodyRect.width - 70);
@@ -5245,8 +5279,8 @@ function applySetting(key, value) {
   const overlay = overlayLayers.find((l) => l.keys.visible === key);
   if (overlay) overlay.mesh.visible = value;
 
-  // A tracked overlay toggling changes what the traffic timeline should plot — refresh it
-  // (only if it's open; hidden it re-reads on next reveal).
+  // A tracked overlay toggling (from its panel checkbox or the legend) flips it on the
+  // activity timeline too — refresh if the timeline is open; hidden, it re-reads on reveal.
   if (TL_TRACK_KEYS.has(key) && tlEl && !tlEl.classList.contains('is-hidden')) refreshTimeline();
 
   // Per-category checkboxes (crime by class, collisions by severity) flip the matching

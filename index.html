@@ -442,13 +442,31 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        cursor: pointer;
+        user-select: none;
+        transition: opacity 120ms ease, color 120ms ease;
       }
 
+      .timeline-legend span:hover {
+        color: var(--text);
+      }
+
+      /* Clicked off: dimmed and struck through, still there to click back on. */
+      .timeline-legend span.is-off {
+        opacity: 0.4;
+        text-decoration: line-through;
+      }
+
+      /* A short line, matching each series' stroke — solid for the fleets, dashed for the
+         overlays — so the legend carries the same solid/dashed cue as the chart. */
       .timeline-legend i {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: var(--k);
+        width: 15px;
+        height: 0;
+        border-top: 2px solid var(--k);
+      }
+
+      .timeline-legend i.dash {
+        border-top-style: dashed;
       }
 
       .timeline-btn {
@@ -1654,7 +1672,7 @@
                wired by hand and never mistaken for a themed look setting. -->
           <label class="check">
             <input type="checkbox" id="timeline-toggle" />
-            <span>Traffic timeline</span>
+            <span>Activity timeline</span>
           </label>
         </section>
 
@@ -2279,12 +2297,10 @@
          close hides it (and unticks the toggle). Curves drawn in JS from the demand data. -->
     <div id="timeline" class="is-hidden panel">
       <div id="timeline-head">
-        <span class="timeline-title">Traffic</span>
-        <span class="timeline-sub" id="timeline-clock">Hourly demand · drag to scrub time</span>
-        <div class="timeline-legend">
-          <span><i style="--k:#d9641e"></i>Taxis</span>
-          <span><i style="--k:#17a074"></i>Bikes</span>
-        </div>
+        <span class="timeline-title">Activity</span>
+        <span class="timeline-sub" id="timeline-clock">By hour · drag to scrub time</span>
+        <!-- Filled from the active series in updateTimelineLegend. -->
+        <div class="timeline-legend"></div>
         <button id="timeline-min" class="timeline-btn" type="button" title="Minimise" aria-label="Minimise timeline">−</button>
         <button id="timeline-close" class="timeline-btn" type="button" title="Close" aria-label="Close timeline">×</button>
       </div>
