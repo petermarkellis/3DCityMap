@@ -167,6 +167,7 @@ const view = {
   damping: 0.06,
   autoOrbit: false,
   autoOrbitSpeed: 0.35,
+  showGizmo: true,
 };
 
 // These keys live in `view` and apply through applyView, not applySetting — but a
@@ -239,6 +240,11 @@ function applyView(key, value) {
     case 'autoOrbitSpeed':
       controls.autoRotateSpeed = value;
       break;
+    case 'showGizmo': {
+      const el = document.querySelector('#gizmo');
+      if (el) el.classList.toggle('is-hidden', !value);
+      break;
+    }
     default:
       break;
   }
@@ -304,6 +310,159 @@ function updateResetTween(dt) {
     controls.update(); // hand control back cleanly, now at the home framing
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Navigation gizmo.
+//
+// A Blender-style axis widget in the top-right: the six world axes drawn as coloured
+// balls that turn with the camera, each a click target that snaps the view to look down
+// that axis. It's a plain 2D canvas repainted every frame from the camera's orientation
+// — no second WebGL pass — so it costs a handful of arcs a frame and nothing when hidden.
+// ---------------------------------------------------------------------------
+
+const GIZMO_SIZE = 96;        // CSS px; the canvas is square
+const GIZMO_CENTER = GIZMO_SIZE / 2;
+const GIZMO_RADIUS = 34;      // distance of an axis ball from the centre
+const GIZMO_HIT = 12;         // click radius around a ball
+
+// X red, Y green, Z blue (the standard). Positive axes are solid lettered balls with a
+// line to the centre; negative axes are hollow rings, dimmed — same as Blender.
+const GIZMO_AXES = [
+  { dir: new THREE.Vector3(1, 0, 0), color: '#e8556d', label: 'X', pos: true },
+  { dir: new THREE.Vector3(-1, 0, 0), color: '#e8556d', label: 'X', pos: false },
+  { dir: new THREE.Vector3(0, 1, 0), color: '#8bd24f', label: 'Y', pos: true },
+  { dir: new THREE.Vector3(0, -1, 0), color: '#8bd24f', label: 'Y', pos: false },
+  { dir: new THREE.Vector3(0, 0, 1), color: '#49a3f0', label: 'Z', pos: true },
+  { dir: new THREE.Vector3(0, 0, -1), color: '#49a3f0', label: 'Z', pos: false },
+];
+
+let gizmoCanvas = null;
+let gizmoCtx = null;
+let gizmoNodes = [];          // last frame's ball screen positions, for hit-testing
+const gizmoInvQ = new THREE.Quaternion();
+const gizmoTmp = new THREE.Vector3();
+
+// Snap the camera to look straight down a world axis, keeping the current distance and
+// look-at target. The polar angle is clamped into OrbitControls' allowed band so the
+// landing framing is one it accepts — no snap-back when it takes over, and the tiny
+// offset off the poles keeps the straight-down/up views out of gimbal lock.
+function axisView(axis) {
+  const dist = camera.position.distanceTo(controls.target);
+  const dir = axis.clone().normalize();
+  let phi = Math.acos(THREE.MathUtils.clamp(dir.y, -1, 1));
+  phi = THREE.MathUtils.clamp(phi, controls.minPolarAngle + 0.03, controls.maxPolarAngle - 0.02);
+  const theta = Math.atan2(dir.x, dir.z);
+  const sinPhi = Math.sin(phi);
+  const pos = new THREE.Vector3(sinPhi * Math.sin(theta), Math.cos(phi), sinPhi * Math.cos(theta))
+    .multiplyScalar(dist)
+    .add(controls.target);
+  const sel = document.querySelector('#view-preset');
+  if (sel) sel.value = 'custom'; // an axis snap is its own framing, not a named preset
+  flyToView(pos, controls.target.clone());
+}
+
+function updateGizmo() {
+  if (!view.showGizmo || !gizmoCtx) return;
+  gizmoCtx.clearRect(0, 0, GIZMO_SIZE, GIZMO_SIZE);
+
+  // Each world axis, rotated into the camera's frame: x/y place it on the dial, z is
+  // depth (positive = toward the viewer) — used to fade and to stack front over back.
+  gizmoInvQ.copy(camera.quaternion).invert();
+  gizmoNodes = GIZMO_AXES.map((a) => {
+    gizmoTmp.copy(a.dir).applyQuaternion(gizmoInvQ);
+    return {
+      axis: a,
+      x: GIZMO_CENTER + gizmoTmp.x * GIZMO_RADIUS,
+      y: GIZMO_CENTER - gizmoTmp.y * GIZMO_RADIUS,
+      z: gizmoTmp.z,
+    };
+  });
+
+  const order = [...gizmoNodes].sort((p, q) => p.z - q.z); // far first (painter's)
+
+  // Spokes to the positive balls first, so the balls sit on top of the lines.
+  for (const n of order) {
+    if (!n.axis.pos) continue;
+    gizmoCtx.globalAlpha = 0.35 + 0.4 * ((n.z + 1) / 2);
+    gizmoCtx.strokeStyle = n.axis.color;
+    gizmoCtx.lineWidth = 2.5;
+    gizmoCtx.beginPath();
+    gizmoCtx.moveTo(GIZMO_CENTER, GIZMO_CENTER);
+    gizmoCtx.lineTo(n.x, n.y);
+    gizmoCtx.stroke();
+  }
+
+  for (const n of order) {
+    const depth = (n.z + 1) / 2;           // 0 (back) .. 1 (front)
+    const r = 6.5 + 2.5 * depth;
+    const alpha = 0.5 + 0.5 * depth;
+    gizmoCtx.globalAlpha = alpha;
+    if (n.axis.pos) {
+      gizmoCtx.fillStyle = n.axis.color;
+      gizmoCtx.beginPath();
+      gizmoCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      gizmoCtx.fill();
+      gizmoCtx.fillStyle = '#0b0d12';
+      gizmoCtx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+      gizmoCtx.textAlign = 'center';
+      gizmoCtx.textBaseline = 'middle';
+      gizmoCtx.fillText(n.axis.label, n.x, n.y + 0.5);
+    } else {
+      gizmoCtx.fillStyle = 'rgba(16, 18, 24, 0.9)';
+      gizmoCtx.beginPath();
+      gizmoCtx.arc(n.x, n.y, r - 1, 0, Math.PI * 2);
+      gizmoCtx.fill();
+      gizmoCtx.strokeStyle = n.axis.color;
+      gizmoCtx.lineWidth = 2;
+      gizmoCtx.beginPath();
+      gizmoCtx.arc(n.x, n.y, r - 1, 0, Math.PI * 2);
+      gizmoCtx.stroke();
+    }
+  }
+  gizmoCtx.globalAlpha = 1;
+}
+
+function setupGizmo() {
+  gizmoCanvas = document.querySelector('#gizmo-canvas');
+  if (!gizmoCanvas) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  gizmoCanvas.width = GIZMO_SIZE * dpr;
+  gizmoCanvas.height = GIZMO_SIZE * dpr;
+  gizmoCtx = gizmoCanvas.getContext('2d');
+  gizmoCtx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px, crisp on retina
+
+  gizmoCanvas.addEventListener('click', (event) => {
+    const rect = gizmoCanvas.getBoundingClientRect();
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
+    let hit = null;
+    for (const n of gizmoNodes) {
+      if (Math.hypot(mx - n.x, my - n.y) <= GIZMO_HIT && (!hit || n.z > hit.z)) hit = n;
+    }
+    if (hit) axisView(hit.axis.dir);
+  });
+
+  // Blender-style delayed tooltip.
+  const tip = document.querySelector('#gizmo-tip');
+  let tipTimer = null;
+  gizmoCanvas.addEventListener('mouseenter', () => {
+    tipTimer = setTimeout(() => tip.classList.add('is-shown'), 450);
+  });
+  gizmoCanvas.addEventListener('mouseleave', () => {
+    clearTimeout(tipTimer);
+    tip.classList.remove('is-shown');
+  });
+
+  // Blender's front/side/top on the number row (numpad-free, works on laptops).
+  window.addEventListener('keydown', (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const tag = event.target && event.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (event.key === '1') axisView(new THREE.Vector3(0, 0, 1));      // front
+    else if (event.key === '3') axisView(new THREE.Vector3(1, 0, 0)); // side
+    else if (event.key === '7') axisView(new THREE.Vector3(0, 1, 0)); // top
+  });
 }
 
 // Live-adjustable look. Everything the panel touches lives here so there is one
@@ -4634,6 +4793,7 @@ function animate() {
   // Right after the render, while the drawing buffer still holds this frame — see
   // drainCapture. Any other time the buffer may already be cleared on present.
   drainCapture();
+  updateGizmo(); // repaint the axis widget to match the camera this frame
   trackFps(dt);
 }
 
@@ -5946,6 +6106,7 @@ setupStats();
 setupControls();
 setupSectionInfo();
 setupCamera();
+setupGizmo();
 // The panels start hidden and the loader covers the screen until Continue. If init
 // throws unexpectedly, reveal the scene anyway so the user is never trapped behind
 // the overlay.

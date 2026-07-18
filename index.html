@@ -323,6 +323,71 @@
         margin-right: -0.12em;
       }
 
+      /* Navigation gizmo — floats top-right, below the title and just left of the Camera
+         card. Only the canvas takes pointer events, so the transparent corners of its box
+         don't steal drags from the scene around it. */
+      #gizmo {
+        position: fixed;
+        top: 150px;
+        right: 262px;
+        z-index: 21;
+        width: 96px;
+        height: 96px;
+        pointer-events: none;
+      }
+
+      #gizmo.is-hidden {
+        display: none;
+      }
+
+      #gizmo-canvas {
+        width: 96px;
+        height: 96px;
+        cursor: pointer;
+        pointer-events: auto;
+      }
+
+      /* Blender-style hover tooltip: a small dark card below the gizmo, revealed on hover
+         (with a short delay, added in JS). */
+      #gizmo-tip {
+        position: absolute;
+        top: 104px;
+        right: 0;
+        width: 210px;
+        padding: 9px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--edge-soft);
+        background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        font-size: 11px;
+        line-height: 1.35;
+        color: var(--muted);
+        opacity: 0;
+        transform: translateY(-4px);
+        transition: opacity 120ms ease, transform 120ms ease;
+        pointer-events: none;
+      }
+
+      #gizmo-tip.is-shown {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      #gizmo-tip strong {
+        color: var(--text);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      #gizmo-tip .gizmo-tip-keys b {
+        color: var(--accent);
+        font-weight: 600;
+      }
+
       /* One column owns the position and the width; the cards inside just stack.
          Keeps stats and controls locked to the same width for free. */
       #hud {
@@ -1303,6 +1368,19 @@
       <p class="coords" data-place-coords></p>
     </header>
 
+    <!-- Navigation gizmo. A 2D canvas painted each frame from the camera's orientation
+         (see updateGizmo): the six world axes as coloured balls that turn with the view,
+         each a click target that snaps the camera to look down that axis. -->
+    <div id="gizmo" aria-hidden="true">
+      <canvas id="gizmo-canvas" width="96" height="96"></canvas>
+      <div id="gizmo-tip" role="tooltip">
+        <strong>Axis gizmo</strong>
+        <span>Click an axis to snap to that view.</span>
+        <span class="gizmo-tip-keys">Keys: <b>1</b> front · <b>3</b> side · <b>7</b> top</span>
+        <span>Drag the scene to rotate freely.</span>
+      </div>
+    </div>
+
     <div id="hud">
       <aside id="stats" data-collapsed>
         <button id="stats-toggle" type="button" aria-expanded="false" aria-controls="stats-body">
@@ -1916,6 +1994,10 @@
               <option value="aerial">Aerial</option>
               <option value="side">Side (sun-lit)</option>
             </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="showGizmo" checked />
+            <span>Axis gizmo</span>
           </label>
 
           <section>
