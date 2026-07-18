@@ -357,10 +357,13 @@ const settings = {
   // fleets currently are. Two independent sources splat into one shared field, so
   // ticking both gives a merged taxi+bike density. A view mode, not a look, so it's
   // kept out of the themes. `heatmapGain` is the sensitivity: how much traffic a cell
-  // needs before it reads as fully "hot".
+  // needs before it reads as fully "hot". `heatmapIntensity` is how vivid the overlay
+  // reads once it's there — saturation plus how much of the building's base colour it
+  // covers — which is what lets it stand out on a muted (e.g. grayscale) theme.
   heatmapTaxi: false,
   heatmapBike: false,
   heatmapGain: 1.0,
+  heatmapIntensity: 1.0,
   // Overlay data layers, also view modes kept out of the themes. Flows = origin→dropoff
   // arcs; events = 311 complaints. Both reveal by the hour on the time scrubber. Flows
   // has two independent sources (taxis, Citi Bike) sharing the width/window/opacity.
@@ -2097,6 +2100,7 @@ async function addBuildings(elements) {
     shader.uniforms.uHeatTex = { value: heatTexture };
     shader.uniforms.uHeatStrength = { value: heatStrength };
     shader.uniforms.uHeatScale = { value: settings.heatmapGain / HEAT_REF };
+    shader.uniforms.uHeatIntensity = { value: settings.heatmapIntensity };
     shader.uniforms.uHeatOrigin = { value: new THREE.Vector2(heatOriginX, heatOriginZ) };
     shader.uniforms.uHeatInvSpan = {
       value: new THREE.Vector2(1 / (heatCols * HEAT_CELL), 1 / (heatRows * HEAT_CELL)),
@@ -2122,6 +2126,7 @@ async function addBuildings(elements) {
         uniform sampler2D uHeatTex;
         uniform float uHeatStrength;
         uniform float uHeatScale;
+        uniform float uHeatIntensity;
         uniform vec2 uHeatOrigin;
         uniform vec2 uHeatInvSpan;
         varying vec2 vHeatWorld;
@@ -2148,8 +2153,15 @@ async function addBuildings(elements) {
         if (uHeatStrength > 0.001) {
           float dens = texture2D(uHeatTex, (vHeatWorld - uHeatOrigin) * uHeatInvSpan).r;
           float t = clamp(dens * uHeatScale, 0.0, 1.0);
-          float w = smoothstep(0.0, 1.0, t) * uHeatStrength;
-          diffuseColor.rgb = mix(diffuseColor.rgb, heatRamp(t), w);
+          vec3 hc = heatRamp(t);
+          // Intensity pushes the ramp colour away from its own luma (more saturation) and
+          // lets it cover more of the building's base colour. Both together lift the heat
+          // off a muted theme, where the grey base would otherwise wash it out. 1.0 leaves
+          // the original look untouched.
+          float luma = dot(hc, vec3(0.299, 0.587, 0.114));
+          hc = clamp(mix(vec3(luma), hc, uHeatIntensity), 0.0, 1.0);
+          float w = clamp(smoothstep(0.0, 1.0, t) * uHeatIntensity, 0.0, 1.0) * uHeatStrength;
+          diffuseColor.rgb = mix(diffuseColor.rgb, hc, w);
         }
       `)
       .replace(
@@ -3520,6 +3532,7 @@ function updateHeatmap(dt) {
   if (shader && shader.uniforms.uHeatStrength) {
     shader.uniforms.uHeatStrength.value = heatStrength;
     shader.uniforms.uHeatScale.value = settings.heatmapGain / HEAT_REF;
+    shader.uniforms.uHeatIntensity.value = settings.heatmapIntensity;
   }
 
   // Fully off and idle: don't spend anything binning agents into a field no one sees.
