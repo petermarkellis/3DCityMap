@@ -388,6 +388,152 @@
         font-weight: 600;
       }
 
+      /* ---- Traffic timeline ----------------------------------------------------
+         A bottom strip slotted into the gap between the two side panels. */
+      #timeline {
+        position: fixed;
+        bottom: 20px;
+        left: 340px;
+        right: 269px;
+        width: auto;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        /* More opaque than the side cards — it's a data surface, and the curves need to
+           read cleanly even when a bright overlay is lit up behind it. */
+        background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
+      }
+
+      #timeline.is-hidden {
+        display: none;
+      }
+
+      #timeline-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--edge-soft);
+      }
+
+      .timeline-title {
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text);
+      }
+
+      .timeline-sub {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .timeline-legend {
+        margin-left: auto;
+        display: flex;
+        gap: 14px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .timeline-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .timeline-legend i {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--k);
+      }
+
+      .timeline-btn {
+        width: 22px;
+        height: 22px;
+        border: 0;
+        border-radius: 6px;
+        background: none;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .timeline-btn:hover {
+        background: var(--btn);
+        color: var(--text);
+      }
+
+      #timeline-body {
+        position: relative;
+        height: 150px;
+        padding: 6px 12px 8px;
+      }
+
+      #timeline.is-min #timeline-body {
+        display: none;
+      }
+
+      /* The whole plot is a time scrubber. */
+      #timeline-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: ew-resize;
+        overflow: visible;
+        touch-action: none;
+        color: var(--muted); /* currentColor for the grid + crosshair */
+      }
+
+      #timeline-svg text {
+        fill: var(--muted);
+        font-size: 9px;
+        letter-spacing: 0.02em;
+      }
+
+      #timeline-svg .tl-xlabel {
+        text-anchor: middle;
+      }
+
+      #timeline-svg .tl-playlabel {
+        fill: var(--accent);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #timeline-svg .tl-empty {
+        fill: var(--muted);
+        font-size: 11px;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+
+      #timeline-tip {
+        position: absolute;
+        pointer-events: none;
+        padding: 6px 9px;
+        border-radius: 7px;
+        border: 1px solid var(--edge-soft);
+        background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+        font-size: 11px;
+        line-height: 1.4;
+        color: var(--text);
+        white-space: nowrap;
+        opacity: 0;
+        transition: opacity 100ms ease;
+        transform: translate(-50%, 0);
+      }
+
+      #timeline-tip.is-shown {
+        opacity: 1;
+      }
+
       /* One column owns the position and the width; the cards inside just stack.
          Keeps stats and controls locked to the same width for free. */
       #hud {
@@ -1504,6 +1650,12 @@
             <input type="checkbox" data-setting="liveTime" checked />
             <span>Live (follow clock)</span>
           </label>
+          <!-- Opens the bottom traffic timeline. Its own id (not data-setting) so it's
+               wired by hand and never mistaken for a themed look setting. -->
+          <label class="check">
+            <input type="checkbox" id="timeline-toggle" />
+            <span>Traffic timeline</span>
+          </label>
         </section>
 
         <section data-collapsed>
@@ -2119,6 +2271,27 @@
           <button id="nav-reset" class="panel-reset" type="button">Reset view</button>
         </div>
       </aside>
+    </div>
+
+    <!-- Traffic timeline. A bottom strip between the two side panels: the hourly demand
+         curves that drive the fleets, with a playhead at the current time you can drag to
+         scrub. Hidden until "Traffic timeline" is ticked; minimise collapses to the header,
+         close hides it (and unticks the toggle). Curves drawn in JS from the demand data. -->
+    <div id="timeline" class="is-hidden panel">
+      <div id="timeline-head">
+        <span class="timeline-title">Traffic</span>
+        <span class="timeline-sub" id="timeline-clock">Hourly demand · drag to scrub time</span>
+        <div class="timeline-legend">
+          <span><i style="--k:#d9641e"></i>Taxis</span>
+          <span><i style="--k:#17a074"></i>Bikes</span>
+        </div>
+        <button id="timeline-min" class="timeline-btn" type="button" title="Minimise" aria-label="Minimise timeline">−</button>
+        <button id="timeline-close" class="timeline-btn" type="button" title="Close" aria-label="Close timeline">×</button>
+      </div>
+      <div id="timeline-body">
+        <svg id="timeline-svg" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <div id="timeline-tip"></div>
+      </div>
     </div>
 
     <div id="loader-overlay">

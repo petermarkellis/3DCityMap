@@ -465,6 +465,250 @@ function setupGizmo() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Traffic timeline.
+//
+// A bottom strip showing the hourly demand curves that drive the fleets — taxis and bikes
+// each as share of their own daily peak, since that's exactly how the sim scales each
+// fleet and it keeps two very different volumes on one axis (the raw counts live in the
+// hover tooltip). A playhead marks the current time; the whole plot is a scrubber, so
+// dragging it sets time-of-day like the slider — they share one piece of state. Drawn as
+// SVG, rebuilt only on resize/refresh; the playhead is the only thing that moves a frame.
+// Palette validated with the dataviz skill's script against the panel surface.
+// ---------------------------------------------------------------------------
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const TL_TAXI = '#d9641e';
+const TL_BIKE = '#17a074';
+const TL_PAD = { l: 10, r: 10, t: 12, b: 20 };
+const TL_HOUR_LABELS = [[0, '12 AM'], [6, '6 AM'], [12, '12 PM'], [18, '6 PM']];
+
+let tlEl = null;
+let tlBody = null;
+let tlSvg = null;
+let tlTip = null;
+let tlToggle = null;
+let tlData = null;            // { taxi[24], bike[24], taxiRaw[24], bikeRaw[24], hasTaxi, hasBike }
+const tlDims = { w: 0, h: 0 };
+let tlPlayhead = null;
+let tlPlayLabel = null;
+let tlCrosshair = null;
+let tlScrubbing = false;
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const key in attrs) el.setAttribute(key, attrs[key]);
+  return el;
+}
+
+const tlX = (hour) => TL_PAD.l + (hour / 24) * (tlDims.w - TL_PAD.l - TL_PAD.r);
+const tlY = (v) => TL_PAD.t + (1 - v) * (tlDims.h - TL_PAD.t - TL_PAD.b);
+
+// Catmull-Rom through the 24 hourly points, emitted as cubic béziers — the smooth curve
+// the reference dashboards use. Points sit at hour centres (h + 0.5).
+function tlSmooth(vals) {
+  const pts = vals.map((v, h) => ({ x: tlX(h + 0.5), y: tlY(v) }));
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+// The point-overlays that can take over the chart, each with its own fixed colour (a
+// separate palette from the fleet one, validated on its own since the two never mix).
+const TL_OVERLAYS = [
+  { key: 'crime', label: 'Crime', color: '#e0648f' },
+  { key: 'collisions', label: 'Collisions', color: '#b3841f' },
+  { key: 'events', label: '311', color: '#2ba3b8' },
+];
+const TL_TRACK_KEYS = new Set(TL_OVERLAYS.map((o) => o.key));
+
+// The base fleets — each byHour[h] is the pickups / rides in that hour.
+function tlFleetSeries() {
+  const out = [];
+  if (demandModel && demandModel.byHour) {
+    out.push({ label: 'Taxis', color: TL_TAXI, raw: Array.from({ length: 24 }, (_, h) => demandModel.byHour[h].length) });
+  }
+  if (bikeDemand && bikeDemand.byHour) {
+    out.push({ label: 'Bikes', color: TL_BIKE, raw: Array.from({ length: 24 }, (_, h) => bikeDemand.byHour[h].length) });
+  }
+  return out;
+}
+
+// Choose what the chart shows: any point-overlay that's toggled on (so the curve matches
+// what you're looking at on the map), or the fleets when none is. Each series is normalised
+// to its own daily peak; the raw counts ride along for the hover tooltip. Safe before data
+// lands — an empty series just doesn't draw.
+function refreshTimeline() {
+  const overlays = TL_OVERLAYS
+    .filter((o) => settings[o.key] && overlayHourly[o.key] && overlayHourly[o.key].some((v) => v > 0))
+    .map((o) => ({ label: o.label, color: o.color, raw: Array.from(overlayHourly[o.key]) }));
+  const chosen = overlays.length > 0 ? overlays : tlFleetSeries();
+  tlData = {
+    series: chosen
+      .filter((s) => s.raw.some((v) => v > 0))
+      .map((s) => {
+        const peak = Math.max(1, ...s.raw);
+        return { ...s, norm: s.raw.map((v) => v / peak) };
+      }),
+  };
+  updateTimelineLegend();
+  drawTimeline();
+}
+
+// The header legend follows the active series (identity stays with the entity — a fixed
+// colour per dataset — so toggling one never repaints the others).
+function updateTimelineLegend() {
+  const legend = tlEl && tlEl.querySelector('.timeline-legend');
+  if (!legend) return;
+  legend.innerHTML = (tlData ? tlData.series : [])
+    .map((s) => `<span><i style="--k:${s.color}"></i>${s.label}</span>`)
+    .join('');
+}
+
+function drawTimeline() {
+  if (!tlSvg) return;
+  tlDims.w = tlSvg.clientWidth;
+  tlDims.h = tlSvg.clientHeight;
+  if (tlDims.w < 40 || tlDims.h < 30) return; // hidden or not laid out yet
+  tlSvg.setAttribute('width', tlDims.w);
+  tlSvg.setAttribute('height', tlDims.h);
+  tlSvg.replaceChildren();
+
+  // Recessive grid at 0 / 50 / 100% of peak, and the hour ticks.
+  for (const g of [0, 0.5, 1]) {
+    tlSvg.appendChild(svgEl('line', {
+      x1: TL_PAD.l, x2: tlDims.w - TL_PAD.r, y1: tlY(g), y2: tlY(g),
+      stroke: 'currentColor', 'stroke-opacity': g === 0 ? 0.25 : 0.1,
+      'stroke-dasharray': g === 0 ? 'none' : '3 4',
+    }));
+  }
+  for (const [h, txt] of TL_HOUR_LABELS) {
+    const label = svgEl('text', { x: tlX(h), y: tlDims.h - 6, class: 'tl-xlabel' });
+    label.textContent = txt;
+    tlSvg.appendChild(label);
+  }
+
+  if (!tlData || tlData.series.length === 0) {
+    const t = svgEl('text', { x: tlDims.w / 2, y: tlDims.h / 2, class: 'tl-empty' });
+    t.textContent = 'No demand data loaded';
+    tlSvg.appendChild(t);
+  } else {
+    for (const s of tlData.series) {
+      tlSvg.appendChild(svgEl('path', {
+        d: tlSmooth(s.norm), fill: 'none', stroke: s.color, 'stroke-width': 2,
+        'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      }));
+    }
+  }
+
+  tlCrosshair = svgEl('line', {
+    y1: TL_PAD.t, y2: tlDims.h - TL_PAD.b, stroke: 'currentColor', 'stroke-opacity': 0.4,
+    'stroke-width': 1, visibility: 'hidden',
+  });
+  tlSvg.appendChild(tlCrosshair);
+
+  tlPlayhead = svgEl('line', { y1: TL_PAD.t - 5, y2: tlDims.h - TL_PAD.b, stroke: 'var(--accent)', 'stroke-width': 2 });
+  tlSvg.appendChild(tlPlayhead);
+  tlPlayLabel = svgEl('text', { class: 'tl-playlabel', y: TL_PAD.t - 8 });
+  tlSvg.appendChild(tlPlayLabel);
+
+  updateTimelinePlayhead();
+}
+
+function updateTimelinePlayhead() {
+  if (!tlPlayhead || !tlEl || tlEl.classList.contains('is-hidden') || tlEl.classList.contains('is-min')) return;
+  const x = tlX(settings.timeOfDay / 60);
+  tlPlayhead.setAttribute('x1', x);
+  tlPlayhead.setAttribute('x2', x);
+  tlPlayLabel.setAttribute('x', Math.min(Math.max(x, TL_PAD.l + 2), tlDims.w - TL_PAD.r - 2));
+  tlPlayLabel.setAttribute('text-anchor', x > tlDims.w - 42 ? 'end' : (x < 42 ? 'start' : 'middle'));
+  tlPlayLabel.textContent = formatClock(settings.timeOfDay);
+}
+
+function setupTimeline() {
+  tlEl = document.querySelector('#timeline');
+  tlBody = document.querySelector('#timeline-body');
+  tlSvg = document.querySelector('#timeline-svg');
+  tlTip = document.querySelector('#timeline-tip');
+  tlToggle = document.querySelector('#timeline-toggle');
+  if (!tlEl) return;
+
+  const setOpen = (open) => {
+    tlEl.classList.toggle('is-hidden', !open);
+    if (tlToggle) tlToggle.checked = open;
+    if (open) {
+      tlEl.classList.remove('is-min');
+      refreshTimeline();
+    }
+  };
+  tlToggle.addEventListener('change', () => setOpen(tlToggle.checked));
+  document.querySelector('#timeline-close').addEventListener('click', () => setOpen(false));
+  document.querySelector('#timeline-min').addEventListener('click', () => {
+    tlEl.classList.toggle('is-min');
+    if (!tlEl.classList.contains('is-min')) drawTimeline();
+  });
+
+  // Redraw when the strip changes size — window resize, or the first reveal out of
+  // display:none (which is when it first gets a real width to draw into).
+  new ResizeObserver(() => drawTimeline()).observe(tlBody);
+
+  const hourAt = (clientX) => {
+    const rect = tlSvg.getBoundingClientRect();
+    const frac = (clientX - rect.left - TL_PAD.l) / (rect.width - TL_PAD.l - TL_PAD.r);
+    return Math.min(24, Math.max(0, frac * 24));
+  };
+  const scrubTo = (clientX) => {
+    const minutes = Math.min(1439, Math.max(0, Math.round(hourAt(clientX) * 60)));
+    applySetting('timeOfDay', minutes); // drops live-time and syncs the slider, same as dragging it
+  };
+  const showHover = (clientX) => {
+    if (!tlData || !tlCrosshair || tlData.series.length === 0) return;
+    const hour = hourAt(clientX);
+    const h = Math.min(23, Math.floor(hour));
+    const x = tlX(hour);
+    tlCrosshair.setAttribute('x1', x);
+    tlCrosshair.setAttribute('x2', x);
+    tlCrosshair.setAttribute('visibility', 'visible');
+    tlTip.innerHTML = `<strong>${formatClock(h * 60)}</strong>`
+      + tlData.series.map((s) => ` · <b style="color:${s.color}">${s.raw[h]}</b> ${s.label}`).join('');
+    // Under the pointer, relative to the body — clamped so it never spills past the edges.
+    const bodyRect = tlBody.getBoundingClientRect();
+    const px = Math.min(Math.max(clientX - bodyRect.left, 70), bodyRect.width - 70);
+    tlTip.style.left = `${px}px`;
+    tlTip.style.top = '0px';
+    tlTip.classList.add('is-shown');
+  };
+  const hideHover = () => {
+    if (tlCrosshair) tlCrosshair.setAttribute('visibility', 'hidden');
+    tlTip.classList.remove('is-shown');
+  };
+
+  tlSvg.addEventListener('pointerdown', (event) => {
+    tlScrubbing = true;
+    tlSvg.setPointerCapture(event.pointerId);
+    scrubTo(event.clientX);
+  });
+  tlSvg.addEventListener('pointermove', (event) => {
+    showHover(event.clientX);
+    if (tlScrubbing) scrubTo(event.clientX);
+  });
+  tlSvg.addEventListener('pointerup', (event) => {
+    tlScrubbing = false;
+    try { tlSvg.releasePointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+  });
+  tlSvg.addEventListener('pointerleave', () => { if (!tlScrubbing) hideHover(); });
+}
+
 // Live-adjustable look. Everything the panel touches lives here so there is one
 // place to read the current state from, and one place to persist it.
 // Structural toggles live outside the theme bundles on purpose: switching palette
@@ -3994,6 +4238,7 @@ function buildEvents(rows) {
   eventsMesh.visible = settings.events;
   eventsMesh.frustumCulled = false;
   eventsMesh.renderOrder = 4;
+  overlayHourly.events = histFromHours(aHour);
   scene.add(eventsMesh);
 }
 
@@ -4045,6 +4290,16 @@ function registerOverlay(layer) {
   overlayLayers.push(layer);
   scene.add(layer.mesh);
   return layer;
+}
+
+// Per-hour counts for each dataset, keyed by its settings toggle (collisions/crime/events).
+// Filled as each layer builds — the traffic timeline reads these to plot an overlay's
+// hourly shape when it's toggled on.
+const overlayHourly = {};
+function histFromHours(hours) {
+  const hist = new Int32Array(24);
+  for (const h of hours) if (h >= 0 && h < 24) hist[h] += 1;
+  return hist;
 }
 
 // Per-category on/off, for the checkboxes that let a layer show only some of its classes
@@ -4156,6 +4411,7 @@ function buildPointLayer(rows, config) {
   mesh.visible = settings[cfg.keys.visible];
   mesh.frustumCulled = false;
   mesh.renderOrder = cfg.renderOrder;
+  overlayHourly[cfg.keys.visible] = histFromHours(aHour);
   return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
@@ -4284,6 +4540,7 @@ function buildMarkerLayer(rows, config) {
   mesh.visible = settings[cfg.keys.visible];
   mesh.frustumCulled = false;
   mesh.renderOrder = cfg.renderOrder;
+  overlayHourly[cfg.keys.visible] = histFromHours(hours);
   return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
@@ -4668,6 +4925,10 @@ async function init() {
     source: mapSource,
   });
 
+  // The demand models are populated now, so the traffic timeline can read them (it's
+  // hidden until opened, but this seeds the curves so the first reveal is instant).
+  refreshTimeline();
+
   // Everything's loaded: mark the log done and surface the Continue button. The
   // reveal (panels in, flyover armed) happens when the user clicks it — see
   // revealScene.
@@ -4796,6 +5057,7 @@ function animate() {
   // drainCapture. Any other time the buffer may already be cleared on present.
   drainCapture();
   updateGizmo(); // repaint the axis widget to match the camera this frame
+  updateTimelinePlayhead(); // slide the traffic-timeline playhead to the clock
   trackFps(dt);
 }
 
@@ -4982,6 +5244,10 @@ function applySetting(key, value) {
   // Registry-backed overlays (collisions, crime, Citi Bike) toggle by their visible key.
   const overlay = overlayLayers.find((l) => l.keys.visible === key);
   if (overlay) overlay.mesh.visible = value;
+
+  // A tracked overlay toggling changes what the traffic timeline should plot — refresh it
+  // (only if it's open; hidden it re-reads on next reveal).
+  if (TL_TRACK_KEYS.has(key) && tlEl && !tlEl.classList.contains('is-hidden')) refreshTimeline();
 
   // Per-category checkboxes (crime by class, collisions by severity) flip the matching
   // enable uniform, and the shader discards that category's instances. Its position in
@@ -6121,6 +6387,7 @@ setupControls();
 setupSectionInfo();
 setupCamera();
 setupGizmo();
+setupTimeline();
 // The panels start hidden and the loader covers the screen until Continue. If init
 // throws unexpectedly, reveal the scene anyway so the user is never trapped behind
 // the overlay.
