@@ -62,7 +62,7 @@ export default {
   // Each building drifts from buildingColor toward one of these three. Two are
   // darker than the base and one lighter, so the city reads as blocks catching
   // the light differently rather than as three flat groups.
-  variationColorA: '#2b2926', variationColorB: '#d0b490', variationColorC: '#3a3532',
+  variationColorA: '#6c675e', variationColorB: '#d0b490', variationColorC: '#bab1ab',
 
   // Camera — how the view moves (the right-hand Camera panel). Speeds and damping
   // are the Motion controls; autoOrbit is the Auto-orbit drift. Drag mode stays a

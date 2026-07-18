@@ -7,7 +7,7 @@
 export default {
   // Theme — identity, plus the accent the whole control panel is tinted with.
   id: 'phosphor',
-  label: 'Green CRT',
+  label: 'CRT',
   theme_dot_swatch: '#11d4ad',
   theme_dot_accent: '#3dffa0',
 
