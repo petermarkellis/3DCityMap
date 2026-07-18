@@ -25,6 +25,11 @@ export default {
   trailTail: '#ff4d0a', trailHead: '#fff0d2',
   trailDecay: 'long', trailOpacity: 0.82,
 
+  // Density heatmap — the choropleth painted onto the buildings. `heatmapGain` is the
+  // Sensitivity (how much traffic reads as hot); `heatmapIntensity` is how vivid it looks.
+  // The on/off toggles stay out of the theme so switching palette never flips the layer.
+  heatmapGain: 1.0, heatmapIntensity: 1.0,
+
   // Environment — reflection colour/strength, plus the sky and floor colours.
   // waterTintStrength 0 leaves the river on its floor colour; raise it (0..1) to wash
   // the water toward waterTint.
@@ -128,7 +133,6 @@ export default {
       // Facades fall toward their own shadow. Kept a hair above black so the edge
       // lines and the sheen still have something to sit on.
       buildingColor: '#a09792',
-      hazeStrength: 7, hazeFade: true,
     },
   },
 };

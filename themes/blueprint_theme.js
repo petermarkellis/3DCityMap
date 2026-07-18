@@ -28,6 +28,10 @@ export default {
   trailTail: '#ee9417', trailHead: '#bcd8ff',
   trailDecay: 'long', trailOpacity: 0.82,
 
+  // Density heatmap defaults. Sensitivity + how vivid the colours read; the on/off
+  // toggles stay out of the theme so switching palette never flips the layer.
+  heatmapGain: 1.0, heatmapIntensity: 1.0,
+
   // Environment — reflection colour/strength, plus the sky and floor colours.
   // The sky and ground hexes look absurdly bright in a colour picker, and
   // have to: they are sRGB, get decoded to linear, then ACES pulls them down

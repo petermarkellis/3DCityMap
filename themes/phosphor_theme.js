@@ -26,6 +26,10 @@ export default {
   trailTail: '#11d4ad', trailHead: '#e2fff0',
   trailDecay: 'long', trailOpacity: 0.82,
 
+  // Density heatmap defaults. Sensitivity + how vivid the colours read; the on/off
+  // toggles stay out of the theme so switching palette never flips the layer.
+  heatmapGain: 1.0, heatmapIntensity: 1.7,
+
   // Environment — reflection colour/strength, plus the sky and floor colours.
   envColor: '#aadac3', envIntensity: 1.5,
   skyColor: '#464e4b', groundColor: '#45594e',

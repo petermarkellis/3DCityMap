@@ -514,11 +514,13 @@ const settings = {
   liveTime: true,
   // Density heatmap — a live choropleth painted onto the buildings from where the
   // fleets currently are. Two independent sources splat into one shared field, so
-  // ticking both gives a merged taxi+bike density. A view mode, not a look, so it's
-  // kept out of the themes. `heatmapGain` is the sensitivity: how much traffic a cell
-  // needs before it reads as fully "hot". `heatmapIntensity` is how vivid the overlay
-  // reads once it's there — saturation plus how much of the building's base colour it
-  // covers — which is what lets it stand out on a muted (e.g. grayscale) theme.
+  // ticking both gives a merged taxi+bike density. The on/off toggles are a view mode
+  // and stay out of the themes (switching palette shouldn't flip the layer), but the
+  // two tuning values below travel with the theme. `heatmapGain` is the sensitivity:
+  // how much traffic a cell needs before it reads as fully "hot". `heatmapIntensity` is
+  // how vivid the overlay reads once it's there — saturation plus how much of the
+  // building's base colour it covers — which lets it stand out on a muted theme. Both
+  // are fallbacks here; a theme carries its own.
   heatmapTaxi: false,
   heatmapBike: false,
   heatmapGain: 1.0,
