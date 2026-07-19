@@ -828,9 +828,10 @@ const settings = {
   collisionInjury: true,
   collisionProperty: true,
   crime: false,
-  crimeSize: 90,
+  crimeWidth: 3,   // cylinder diameter in world units — thin, close to the point reported
+  crimeHeight: 40, // cylinder height in world units
   crimeWindow: 1.2,
-  crimeOpacity: 0.5, // semi-transparent pyramids; the control fades them further or solid
+  crimeOpacity: 0.5, // semi-transparent cylinders; the control fades them further or solid
   // Per-legal-class toggles, same as collisions.
   crimeFelony: true,
   crimeMisdemeanour: true,
@@ -4432,7 +4433,8 @@ function updateOverlays(dt) {
       u.uFlowOpacity.value = settings[layer.keys.opacity];
       layer.material.linewidth = settings[layer.keys.width];
     } else {
-      u.uSize.value = settings[layer.keys.size];
+      u.uWidth.value = settings[layer.keys.width];
+      u.uHeight.value = settings[layer.keys.height];
       u.uOpacity.value = settings[layer.keys.opacity];
     }
   }
@@ -4466,6 +4468,15 @@ function histFromHours(hours) {
 // Per-point positions + hours for the datasets the density heatmap can splat (crime).
 // Kept on the CPU when the layer builds, since the density field is binned CPU-side.
 const overlayPoints = {};
+
+// Click-to-inspect sources. Each layer that wants a callout registers one here; a click
+// tries them in priority order (highest first) and opens the first that reports a hit.
+// `pick(ctx)` returns { x, z, html, key } for the world anchor, panel content and the
+// settings toggle that owns it, or null for a miss. Kept generic so collisions (raycast an
+// InstancedMesh) and crime (screen-space nearest marker, since its geometry is GPU-instanced
+// and invisible to the raycaster) can share one callout.
+const calloutSources = [];
+function registerCalloutSource(source) { calloutSources.push(source); }
 
 // Per-category on/off, for the checkboxes that let a layer show only some of its classes
 // (crime by legal class, collisions by severity). Six enable uniforms — a ternary chain
@@ -4543,12 +4554,18 @@ function buildCollisionGrid(rows) {
         fatal: new Float32Array(24),
         injury: new Float32Array(24),
         property: new Float32Array(24),
+        killed: new Float32Array(24),   // people killed, for the click-to-inspect panel
+        injured: new Float32Array(24),  // people injured
       };
       cellMap.set(key, cell);
     }
-    if (+r.number_of_persons_killed > 0) cell.fatal[hour] += 1;
-    else if (+r.number_of_persons_injured > 0) cell.injury[hour] += 1;
+    const killed = +r.number_of_persons_killed || 0;
+    const injured = +r.number_of_persons_injured || 0;
+    if (killed > 0) cell.fatal[hour] += 1;
+    else if (injured > 0) cell.injury[hour] += 1;
     else cell.property[hour] += 1;
+    cell.killed[hour] += killed;
+    cell.injured[hour] += injured;
     allHours.push(hour);
   }
   const cells = [...cellMap.values()];
@@ -4661,6 +4678,19 @@ function buildCollisionGrid(rows) {
   }
   update(settings.timeOfDay / 60);
 
+  // Click-to-inspect: raycast the columns (a real InstancedMesh), map instanceId → cell.
+  registerCalloutSource({
+    priority: 1,
+    visible: () => mesh.visible,
+    pick: (ctx) => {
+      for (const hit of ctx.ray.intersectObject(mesh, false)) {
+        const cell = hit.instanceId != null ? cells[hit.instanceId] : null;
+        if (cell) return { x: cell.cx, z: cell.cz, html: collisionCalloutHTML(cell), key: 'collisions' };
+      }
+      return null;
+    },
+  });
+
   return registerOverlay({
     mesh, material: mat, kind: 'grid', update,
     keys: { visible: 'collisions', window: 'collisionWindow', size: 'collisionSize', opacity: 'collisionOpacity' },
@@ -4669,23 +4699,18 @@ function buildCollisionGrid(rows) {
 }
 
 // One marker's geometry: a tall, narrow square-pyramid spike hanging point-DOWN — the
-// thin apex touches the street and it widens upward, long enough to clear the towers so
-// it reads from across the map. Rotated so the apex points at the floor, then baked so
-// that apex sits at the local origin, so the per-instance scale grows it upward from the
-// street rather than about its middle. The height-to-base ratio lives here (uniform
-// instance scale can't stretch one axis), so this is the knob for how needle-like it is.
+// slim cylinder standing on the street — the same "column rising from the ground" language
+// as the collision grid, but round and one per incident. Unit height with the base at the
+// origin, so a per-instance height scale grows it up from the street; radius 0.5 so the
+// width uniform reads straight through as a diameter in world units.
 function makeMarkerGeometry() {
-  const height = 21; // ~8× the base footprint, so it stands well above the buildings
-  const geo = new THREE.ConeGeometry(1.2, height, 4); // 4 radial segments = square pyramid
-  geo.rotateX(Math.PI);            // flip apex down
-  geo.translate(0, height / 2, 0); // apex now at the local origin, base up
-  return geo;
+  return new THREE.CylinderGeometry(0.5, 0.5, 1, 14).translate(0, 0.5, 0);
 }
 
-// Crime markers. Same registry contract as the point layer (updateOverlays drives uHour /
-// uWindow / uSize / uOpacity, applySetting toggles by keys.visible), but rendered as
-// semi-transparent pastel pyramids instead of additive glow sprites. One instanced draw:
-// the pyramid geometry is shared, and per-marker position / hour / colour ride as
+// Crime markers. Registry contract of the point layer (updateOverlays drives uHour /
+// uWindow / uWidth / uHeight / uOpacity, applySetting toggles by keys.visible), rendered as
+// semi-transparent pastel cylinders — one per incident, standing on the street. One instanced
+// draw: the cylinder geometry is shared, and per-marker position / hour / colour ride as
 // instanced attributes. No pulse, no bloom — presence alone, gated by the clock.
 function buildMarkerLayer(rows, config) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -4733,7 +4758,8 @@ function buildMarkerLayer(rows, config) {
       uHour: { value: 12 },
       uWindow: { value: settings[cfg.keys.window] },
       uTime: { value: 0 }, // set by updateOverlays but unused — these don't animate
-      uSize: { value: settings[cfg.keys.size] },
+      uWidth: { value: settings[cfg.keys.width] },
+      uHeight: { value: settings[cfg.keys.height] },
       uOpacity: { value: settings[cfg.keys.opacity] },
       ...categoryEnableUniforms(cfg),
     },
@@ -4742,7 +4768,7 @@ function buildMarkerLayer(rows, config) {
       attribute float aHour;
       attribute vec3 aColor;
       attribute float aCat;
-      uniform float uHour, uWindow, uSize;
+      uniform float uHour, uWindow, uWidth, uHeight;
       varying vec3 vColor;
       varying float vCat;
       varying float vVis;
@@ -4753,11 +4779,11 @@ function buildMarkerLayer(rows, config) {
         vVis = smoothstep(uWindow, 0.0, d);
         vColor = aColor;
         vCat = aCat;
-        // Out-of-window markers scale to nothing, so scrubbing the clock grows them in
-        // from the street at their hour.
-        float s = uSize * 0.02 * (0.0001 + vVis);
+        // Width is a fixed diameter; the height grows in from the street with the time
+        // window, so scrubbing the clock raises each cylinder at its hour.
+        vec3 p = vec3(position.x * uWidth, position.y * uHeight * (0.0001 + vVis), position.z * uWidth);
         vNormalV = normalize(normalMatrix * normal);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position * s + aOffset, 1.0);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p + aOffset, 1.0);
       }
     `,
     fragmentShader: /* glsl */`
@@ -4795,6 +4821,18 @@ function buildMarkerLayer(rows, config) {
   mesh.renderOrder = cfg.renderOrder;
   overlayHourly[cfg.keys.visible] = histFromHours(hours);
   overlayPoints[cfg.keys.visible] = { offsets: new Float32Array(offsets), hours: new Float32Array(hours), count };
+
+  // Click-to-inspect: these markers are GPU-instanced (custom attributes, not a real
+  // InstancedMesh), so the raycaster can't see them — pick the nearest one in screen space.
+  if (cfg.callout) {
+    const data = { offsets: new Float32Array(offsets), hours: new Float32Array(hours), cats: new Float32Array(cats), count, cfg };
+    registerCalloutSource({
+      priority: 2, // small precise targets win over the big collision columns behind them
+      visible: () => mesh.visible,
+      pick: (ctx) => pickMarker(ctx, data),
+    });
+  }
+
   return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
 }
 
@@ -4950,7 +4988,9 @@ function buildCrime(rows) {
     category: (r) => (r.law_cat_cd === 'FELONY' ? 0 : (r.law_cat_cd === 'MISDEMEANOR' ? 1 : 2)),
     colors: ['#f4a6c0', '#f2e0a0', '#a9c9f2'], // felony · misdemeanour · violation, pastel
     categoryKeys: ['crimeFelony', 'crimeMisdemeanour', 'crimeViolation'],
-    keys: { visible: 'crime', size: 'crimeSize', window: 'crimeWindow', opacity: 'crimeOpacity' },
+    keys: { visible: 'crime', width: 'crimeWidth', height: 'crimeHeight', window: 'crimeWindow', opacity: 'crimeOpacity' },
+    // Click-to-inspect: each marker is one complaint, labelled by its legal class.
+    callout: { noun: 'NYPD complaint', labels: ['Felony', 'Misdemeanour', 'Violation'], colors: ['#f4a6c0', '#f2e0a0', '#a9c9f2'] },
   });
 }
 
@@ -5264,6 +5304,195 @@ function updateHaze() {
 
 const clock = new THREE.Clock();
 
+// ---------------------------------------------------------------------------
+// Click-to-inspect callout. Click a collision column: a white line rises from the
+// street, and when it tops out an HTML panel fades in with that block's crash data.
+// The panel is a DOM element projected onto the line's tip every frame, so it always
+// faces the camera and stays a fixed, readable size no matter the zoom. Click empty
+// space to drop it. The core (world anchor + some HTML) is generic, so crime and other
+// layers can reuse it later — only the pick source and the HTML builder are collision-specific.
+// ---------------------------------------------------------------------------
+const CALLOUT_TARGET_H = 105; // world height the line climbs to — clear of the towers
+const CALLOUT_RISE = 4.5;     // rise/fall speed (1/seconds), ~0.22s end to end
+
+const calloutEl = document.querySelector('#callout');
+const calloutBody = document.querySelector('#callout-body');
+
+// The rising white stem. It lives in its own overlay scene rendered AFTER the composer, so
+// the bloom and depth-of-field passes never touch it — no glow halo and no focus blur, just
+// a crisp white line whatever the camera happens to be focused on. Drawn over cleared depth,
+// so it also always reads on top of the city.
+const calloutOverlay = new THREE.Scene();
+const calloutLine = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.7, 0.7, 1, 8).translate(0, 0.5, 0),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
+);
+calloutLine.visible = false;
+calloutOverlay.add(calloutLine);
+
+const calloutRay = new THREE.Raycaster();
+const calloutPointer = new THREE.Vector2();
+const calloutAnchor = new THREE.Vector3();
+let calloutState = 'idle'; // idle | rising | shown | hiding
+let calloutProgress = 0;   // 0 at the ground, 1 at full height
+let calloutX = 0;
+let calloutZ = 0;
+let calloutLayerKey = null; // settings toggle that owns the open panel — closes when it turns off
+
+// Crash data for one cell, near the current clock, as the panel's inner HTML. A snapshot
+// taken at click time — scrubbing the clock afterwards leaves the open panel unchanged.
+function collisionCalloutHTML(cell) {
+  const hour = settings.timeOfDay / 60;
+  const win = settings.collisionWindow;
+  let fatal = 0; let injury = 0; let property = 0; let killed = 0; let injured = 0;
+  for (let h = 0; h < 24; h += 1) {
+    let d = Math.abs(h - hour);
+    d = Math.min(d, 24 - d);
+    if (d >= win) continue;
+    fatal += cell.fatal[h]; injury += cell.injury[h]; property += cell.property[h];
+    killed += cell.killed[h]; injured += cell.injured[h];
+  }
+  fatal = Math.round(fatal); injury = Math.round(injury); property = Math.round(property);
+  killed = Math.round(killed); injured = Math.round(injured);
+  const total = fatal + injury + property;
+  const sevColor = fatal > 0 ? '#ff2e2e' : injury > 0 ? '#ff9d2e' : '#5b8cff';
+  const lon = CENTER_LON + cell.cx / (METRES_PER_DEG_LON * UNITS_PER_METRE);
+  const lat = CENTER_LAT - cell.cz / (METRES_PER_DEG_LAT * UNITS_PER_METRE);
+
+  const sev = [];
+  if (fatal) sev.push(`<span><i style="background:#ff2e2e"></i>${fatal} fatal</span>`);
+  if (injury) sev.push(`<span><i style="background:#ff9d2e"></i>${injury} injury</span>`);
+  if (property) sev.push(`<span><i style="background:#5b8cff"></i>${property} property-only</span>`);
+  const casualties = [];
+  if (killed) casualties.push(`${killed} killed`);
+  if (injured) casualties.push(`${injured} injured`);
+
+  return `
+    <div class="callout-kind" style="--sev:${sevColor}">${total === 1 ? 'Collision' : `${total} collisions`}</div>
+    <div class="callout-sub">around ${formatClock(settings.timeOfDay)} · this block</div>
+    <div class="callout-sev">${sev.join('')}</div>
+    <div class="callout-cas">${casualties.length ? casualties.join(' · ') : 'No casualties'}</div>
+    <div class="callout-loc">${lat.toFixed(4)}°N, ${Math.abs(lon).toFixed(4)}°W</div>
+  `;
+}
+
+// One marker (e.g. a single crime complaint) as panel HTML, from the layer's callout config.
+function markerCalloutHTML(idx, data) {
+  const { offsets, hours, cats, cfg } = data;
+  const c = cfg.callout;
+  const cat = cats[idx];
+  const label = c.labels[Math.min(cat, c.labels.length - 1)];
+  const color = c.colors[Math.min(cat, c.colors.length - 1)];
+  const lon = CENTER_LON + offsets[idx * 3] / (METRES_PER_DEG_LON * UNITS_PER_METRE);
+  const lat = CENTER_LAT - offsets[idx * 3 + 2] / (METRES_PER_DEG_LAT * UNITS_PER_METRE);
+  return `
+    <div class="callout-kind" style="--sev:${color}">${label}</div>
+    <div class="callout-sub">${c.noun} · this location</div>
+    <div class="callout-cas">Reported around ${formatClock(Math.round(hours[idx] * 60))}</div>
+    <div class="callout-loc">${lat.toFixed(4)}°N, ${Math.abs(lon).toFixed(4)}°W</div>
+  `;
+}
+
+// Screen-space nearest-marker pick for GPU-instanced point layers (crime): project every
+// marker that is actually visible right now (in the time window and an enabled category) and
+// take the closest to the click. Anchors partway up the marker so clicking its body hits.
+const CALLOUT_PICK_PX = 24;
+const calloutProject = new THREE.Vector3();
+function pickMarker(ctx, data) {
+  const { offsets, hours, cats, count, cfg } = data;
+  const win = settings[cfg.keys.window];
+  const hour = settings.timeOfDay / 60;
+  const anchorH = settings[cfg.keys.height] * 0.45; // ~mid-height of the cylinder
+  let best = -1;
+  let bestDist = CALLOUT_PICK_PX;
+  for (let idx = 0; idx < count; idx += 1) {
+    let d = Math.abs(hours[idx] - hour);
+    d = Math.min(d, 24 - d);
+    if (d >= win) continue; // faded out of the time window
+    const catKey = cfg.categoryKeys && cfg.categoryKeys[cats[idx]];
+    if (catKey && !settings[catKey]) continue; // its category toggle is off
+    calloutProject.set(offsets[idx * 3], offsets[idx * 3 + 1] + anchorH, offsets[idx * 3 + 2]).project(camera);
+    if (calloutProject.z > 1) continue; // behind the camera
+    const sx = (calloutProject.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-calloutProject.y * 0.5 + 0.5) * window.innerHeight;
+    const dist = Math.hypot(sx - ctx.screenX, sy - ctx.screenY);
+    if (dist < bestDist) { bestDist = dist; best = idx; }
+  }
+  if (best < 0) return null;
+  return { x: offsets[best * 3], z: offsets[best * 3 + 2], html: markerCalloutHTML(best, data), key: cfg.keys.visible };
+}
+
+function openCallout(x, z, html, layerKey) {
+  calloutX = x;
+  calloutZ = z;
+  calloutLayerKey = layerKey;
+  calloutBody.innerHTML = html;
+  calloutLine.position.set(x, 0, z);
+  calloutLine.visible = true;
+  // Fresh selection rises from the ground; retargeting an open one keeps its height.
+  if (calloutState === 'idle' || calloutState === 'hiding') calloutState = 'rising';
+}
+
+function dismissCallout() {
+  if (calloutState === 'idle') return;
+  calloutState = 'hiding';
+  calloutEl.classList.remove('is-open');
+}
+
+function updateCallout(dt) {
+  if (calloutState === 'idle') return;
+  if (calloutLayerKey && !settings[calloutLayerKey]) { dismissCallout(); } // owning layer turned off
+
+  if (calloutState === 'rising') {
+    calloutProgress = Math.min(1, calloutProgress + dt * CALLOUT_RISE);
+    if (calloutProgress >= 1) { calloutState = 'shown'; calloutEl.classList.add('is-open'); }
+  } else if (calloutState === 'hiding') {
+    calloutProgress = Math.max(0, calloutProgress - dt * CALLOUT_RISE);
+    if (calloutProgress <= 0) {
+      calloutState = 'idle';
+      calloutLine.visible = false;
+      calloutEl.classList.remove('is-visible');
+      return;
+    }
+  }
+
+  const topY = CALLOUT_TARGET_H * calloutProgress;
+  calloutLine.scale.set(1, Math.max(topY, 0.001), 1);
+
+  // Pin the panel to the line's tip in screen space so it billboards and holds its size.
+  calloutAnchor.set(calloutX, topY, calloutZ).project(camera);
+  const behind = calloutAnchor.z > 1;
+  calloutEl.classList.toggle('is-visible', !behind);
+  if (!behind) {
+    calloutEl.style.left = `${(calloutAnchor.x * 0.5 + 0.5) * window.innerWidth}px`;
+    calloutEl.style.top = `${(-calloutAnchor.y * 0.5 + 0.5) * window.innerHeight}px`;
+  }
+}
+
+// A click (not an orbit drag) on the canvas: try each visible callout source in priority
+// order and open the first hit, or dismiss on empty space.
+let calloutDownX = 0;
+let calloutDownY = 0;
+let calloutDownT = 0;
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  calloutDownX = event.clientX; calloutDownY = event.clientY; calloutDownT = performance.now();
+});
+renderer.domElement.addEventListener('pointerup', (event) => {
+  const moved = Math.hypot(event.clientX - calloutDownX, event.clientY - calloutDownY);
+  if (moved > 6 || performance.now() - calloutDownT > 600) return; // a drag/orbit, not a click
+  const rect = renderer.domElement.getBoundingClientRect();
+  calloutPointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  calloutPointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  calloutRay.setFromCamera(calloutPointer, camera);
+  const ctx = { ray: calloutRay, screenX: event.clientX - rect.left, screenY: event.clientY - rect.top };
+  const sources = calloutSources.filter((s) => s.visible()).sort((a, b) => b.priority - a.priority);
+  for (const source of sources) {
+    const info = source.pick(ctx);
+    if (info) { openCallout(info.x, info.z, info.html, info.key); return; }
+  }
+  dismissCallout(); // clicked empty space
+});
+
 function animate() {
   requestAnimationFrame(animate);
 
@@ -5296,9 +5525,18 @@ function animate() {
   }
   updateHeatmap(dt);
   updateOverlays(dt);
+  updateCallout(dt); // rise/settle the click-to-inspect line and pin its panel
 
   updateReflectionProbe(dt);
   composer.render();
+  // The callout line draws here, on top of the fully post-processed frame, so bloom and
+  // depth-of-field never reach it. Clear only depth so it lands over the composited colour.
+  if (calloutLine.visible) {
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(calloutOverlay, camera);
+    renderer.autoClear = true;
+  }
   // Right after the render, while the drawing buffer still holds this frame — see
   // drainCapture. Any other time the buffer may already be cleared on present.
   drainCapture();
@@ -6148,7 +6386,9 @@ function wirePanel(panel, state, apply, read = (key) => state[key]) {
       else value = input.value;
 
       apply(key, value);
-      syncInput(input);
+      // Sync every control bound to this key, not just the one that fired, so a section's
+      // header switch and its in-body checkbox move together.
+      for (const other of inputs) if (other.dataset.setting === key) syncInput(other);
     });
   }
 
@@ -6322,6 +6562,28 @@ function setupControls() {
   const { syncInputs, syncLiveReadouts } = wirePanel(panel, settings, applySettingFromPanel, readAuthored);
   const { syncCells } = wirePhaseCells(panel);
   syncLookReadouts = syncLiveReadouts;
+
+  // Group "master" switches: one header switch standing in for several sub-toggles (e.g. the
+  // density heatmap's taxi/bike/crime). It reads green when ANY of them is on; clicking it
+  // turns them all off when any are on, or all on when none are. It also follows the group —
+  // toggling a sub-checkbox re-syncs the master so it greys out when the last one goes off.
+  for (const master of panel.querySelectorAll('.switch-input[data-master]')) {
+    const keys = master.dataset.master.split(/\s+/);
+    const subInputs = keys.map((k) => panel.querySelector(`[data-setting="${k}"]`)).filter(Boolean);
+    const anyOn = () => keys.some((k) => settings[k]);
+    const syncMaster = () => { master.checked = anyOn(); };
+    syncMaster();
+    master.addEventListener('click', () => {
+      const target = !anyOn(); // any on → clear all; all off → set all
+      for (const cb of subInputs) {
+        if (cb.checked === target) continue;
+        cb.checked = target;
+        cb.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      syncMaster();
+    });
+    for (const cb of subInputs) cb.addEventListener('input', syncMaster);
+  }
 
   // Caption every phased scalar's number-box row so it reads unambiguously even when the
   // section's top header has scrolled off: the full-width slider above is the Day value,
@@ -6637,7 +6899,8 @@ const SECTION_INFO = {
       </ul>
       <p>A month of complaints is aggregated <strong>by time of day</strong>, so scrubbing
       the Time-of-day slider replays when offences cluster across the map.</p>
-      <p class="info-controls"><strong>Size</strong> — how big each marker is.
+      <p class="info-controls"><strong>Width</strong> / <strong>Height</strong> — the size of
+      each cylinder; keep the width narrow so it sits close to the reported point.
       <strong>Hour spread</strong> — how many hours of reports show at once.
       <strong>Opacity</strong> — fades the whole layer.</p>`,
   },
