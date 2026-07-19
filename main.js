@@ -865,6 +865,22 @@ const settings = {
   // it as the camera zooms out so overviews stay clear. View prefs, not themed.
   hazeStrength: 0.5,
   hazeFade: true,
+  // Area fill lights (Fill lights section) — the two softboxes high above the city that
+  // lift the massing out of shadow when the sun is low and hard. Each theme carries its own
+  // set (see the theme files); these are only the fallback if a theme omits them. `areaOn`
+  // kills both; strength/colour/size are shared (a matched pair), position is per-light,
+  // `areaTarget` picks which surfaces they touch. `areaOutlines` (the yellow placement
+  // border) is a tool, not a look, so it stays a view pref and out of the themes.
+  // RectAreaLights can't cast shadows in three.js — that's the sun's job.
+  areaOn: true,
+  areaStrength: 0.55,
+  areaColor: '#ffffff',
+  areaWidth: 700,
+  areaHeight: 460,
+  areaOutlines: false,
+  areaTarget: 'both', // which surfaces the fill catches: 'both' | 'buildings' | 'surface'
+  area1X: -360, area1Y: 620, area1Z: 260,
+  area2X: 380, area2Y: 680, area2Z: -240,
   ...themeValues(DEFAULT_THEME),
 };
 
@@ -1111,14 +1127,96 @@ sun.shadow.radius = 10;
 // reads as ambient sheen instead of a blown-out hotspot.
 RectAreaLightUniformsLib.init();
 
-const AREA_LIGHT_INTENSITY = 0.55;
+// Kept in arrays so the Fill-lights panel can drive them live. Strength / colour / size are
+// shared (a matched pair); position is per-light, read from the settings keys named here.
+const areaLights = [];
+const areaOutlines = [];
+const AREA_LIGHT_POS = [
+  ['area1X', 'area1Y', 'area1Z'],
+  ['area2X', 'area2Y', 'area2Z'],
+];
 
-for (const position of [[-360, 620, 260], [380, 680, -240]]) {
-  const light = new THREE.RectAreaLight(0xffffff, AREA_LIGHT_INTENSITY, 700, 460);
-  light.position.set(...position);
-  light.lookAt(0, 0, 0);
-  scene.add(light);
+// Selective targeting. three gates a whole LIGHT by the camera's layers, not per object,
+// so layer tricks can't aim a shared light at one surface and not another — off-camera-layer
+// just drops the light entirely. Instead each lit material (buildings, ground/water) scales
+// the fill's contribution in its own shader by a uniform: 1 = full fill, 0 = ignore it. The
+// lights stay global; the materials decide who listens. Buildings and the ground are the only
+// lit surfaces anyway — trails and markers are shader-based and ignore scene lights.
+const areaFillBuildings = { value: 1 };
+const areaFillSurface = { value: 1 };
+
+// Patch a MeshStandardMaterial's shader so the rect-area (fill) light contribution is scaled
+// by uAreaFill. It captures the lit result just before the rect-area loop and lerps back to
+// it afterwards, so only the fill term is touched — the sun, ambient and env are untouched.
+function injectAreaFill(shader, uniformRef) {
+  shader.uniforms.uAreaFill = uniformRef;
+  shader.fragmentShader = 'uniform float uAreaFill;\n' + shader.fragmentShader.replace(
+    '#include <lights_fragment_begin>',
+    THREE.ShaderChunk.lights_fragment_begin
+      .replace(
+        'RectAreaLight rectAreaLight;',
+        'RectAreaLight rectAreaLight;\n\tvec3 _fillD = reflectedLight.directDiffuse;\n\tvec3 _fillS = reflectedLight.directSpecular;'
+      )
+      .replace(
+        '#endif\n#if defined( RE_IndirectDiffuse )',
+        '\treflectedLight.directDiffuse = mix( _fillD, reflectedLight.directDiffuse, uAreaFill );'
+        + '\n\treflectedLight.directSpecular = mix( _fillS, reflectedLight.directSpecular, uAreaFill );'
+        + '\n#endif\n#if defined( RE_IndirectDiffuse )'
+      )
+  );
 }
+
+function applyAreaTarget() {
+  areaFillBuildings.value = settings.areaTarget === 'surface' ? 0 : 1;
+  areaFillSurface.value = settings.areaTarget === 'buildings' ? 0 : 1;
+}
+
+// A yellow rectangle the size of the light, parented to it so it inherits the light's
+// position and aim — the "Show placement outlines" toggle reveals where each softbox sits.
+function makeAreaOutline(light) {
+  // toneMapped:false keeps the yellow pure-bright whatever the exposure; depthTest:false +
+  // a high render order draws it over everything so the panel is findable even behind towers.
+  const mat = new THREE.LineBasicMaterial({ color: 0xffee00, toneMapped: false, depthTest: false, transparent: true });
+  const line = new THREE.LineLoop(new THREE.BufferGeometry(), mat);
+  line.visible = settings.areaOutlines;
+  line.renderOrder = 999;
+  light.add(line);
+  return line;
+}
+function refreshAreaOutlineGeometry() {
+  const w = settings.areaWidth / 2;
+  const h = settings.areaHeight / 2;
+  const pts = [
+    new THREE.Vector3(-w, -h, 0), new THREE.Vector3(w, -h, 0),
+    new THREE.Vector3(w, h, 0), new THREE.Vector3(-w, h, 0),
+  ];
+  for (const line of areaOutlines) line.geometry.setFromPoints(pts);
+}
+function positionAreaLight(i) {
+  const [kx, ky, kz] = AREA_LIGHT_POS[i];
+  const light = areaLights[i];
+  light.position.set(settings[kx], settings[ky], settings[kz]);
+  // A light parked almost directly over the centre aims straight down, which makes the
+  // default up-vector degenerate (the panel flips to edge-on). Tilt `up` for that case so
+  // the orientation stays stable; otherwise the default up is correct.
+  light.up.set(0, 1, 0);
+  if (Math.hypot(settings[kx], settings[kz]) < 1) light.up.set(0, 0, -1);
+  light.lookAt(0, 0, 0); // re-aim at the city centre after any move
+}
+
+for (let i = 0; i < AREA_LIGHT_POS.length; i += 1) {
+  const light = new THREE.RectAreaLight(
+    settings.areaColor,
+    settings.areaOn ? settings.areaStrength : 0,
+    settings.areaWidth, settings.areaHeight,
+  );
+  scene.add(light);
+  areaLights.push(light);
+  areaOutlines.push(makeAreaOutline(light));
+  positionAreaLight(i);
+}
+refreshAreaOutlineGeometry();
+applyAreaTarget();
 
 // No rim/fill light: a second directional puts a hard specular hit on every
 // rooftop at once, which the bloom then smears into one blue blob over midtown.
@@ -1502,6 +1600,7 @@ groundMaterial.onBeforeCompile = (shader) => {
       // Ground sits at the street, so it's always in the mist (worldY 0 → full height factor).
       gl_FragColor.rgb = applyHeightFog(gl_FragColor.rgb, vWaterWorld, 0.0);
     `);
+  injectAreaFill(shader, areaFillSurface); // Fill-lights "Applies to" — surface share
 };
 
 // A single quad has no interior vertices, so there would be nothing for the land rise
@@ -2615,6 +2714,7 @@ async function addBuildings(elements) {
         '#include <fog_fragment>',
         '#include <fog_fragment>\n\tgl_FragColor.rgb = applyHeightFog(gl_FragColor.rgb, vFogWorld.xz, vFogWorld.y);'
       );
+    injectAreaFill(shader, areaFillBuildings); // Fill-lights "Applies to" — buildings share
   };
 
   buildingCount = geometries.length;
@@ -4318,6 +4418,12 @@ function updateOverlays(dt) {
   // The extra datasets (collisions, crime, Citi Bike) go through the registry.
   for (const layer of overlayLayers) {
     if (!layer.mesh.visible) continue;
+    if (layer.kind === 'grid') {
+      // Aggregated columns: opacity is a live uniform; heights/colours rebuild on demand.
+      layer.material.uniforms.uOpacity.value = settings[layer.keys.opacity];
+      layer.update(hour);
+      continue;
+    }
     const u = layer.material.uniforms;
     u.uHour.value = hour;
     u.uTime.value = overlayTime;
@@ -4380,98 +4486,186 @@ const CATEGORY_GATE_GLSL = /* glsl */`
           : vCat < 3.5 ? uE3 : vCat < 4.5 ? uE4 : uE5;
         if (en < 0.5) discard;`;
 
-// Point layer (311, collisions, crime): glowing category-coloured points that surface
-// at their hour. config: lon/lat/hour/category accessors, a colours array, settings keys.
-function buildPointLayer(rows, config) {
-  if (!Array.isArray(rows) || rows.length === 0) return null;
-  const cfg = { y: 2.0, renderOrder: 4, ...config };
+// Collisions grid — an aggregated column field, not a scatter of points. One glow-orb
+// per crash turned midtown into a field of pulsing Christmas lights that read as noise;
+// binning the crashes into cells and standing a column on each turns that noise into a
+// legible terrain of risk, where height and colour both say how bad a block is. It's the
+// hex-bin idea: columns are hexagonal prisms, though binned on a plain square grid aligned
+// to the city footprint so the binning stays exact. Time still drives it — each cell keeps
+// a 24-hour histogram and a column's height is the crash count inside the Hour-spread
+// window around the clock, so towers grow and fall as you scrub.
+const GRID_CELL = 27;         // world units per bin (~270 m) — a block or two, so a hot cell reads as a place, not a district
+const GRID_MIN = 1.5;         // crashes a cell needs before a column shows at all (prune clutter)
+const GRID_MIN_H = 4;         // shortest a shown column can be, so none collapse to a ground-hugging disc that z-fights the floor
+const GRID_HEIGHT_K = 12;     // world units per unit of sqrt(crashes) above the floor
+const GRID_HEIGHT_MAX = 52;   // cap so one mega-cell can't spike off the top of the scene
+const COLLISION_COLORS = [
+  new THREE.Color('#ff2e2e'), // fatal
+  new THREE.Color('#ff9d2e'), // injury
+  new THREE.Color('#5b8cff'), // property-only
+];
 
-  const pos = [];
-  const aHour = [];
-  const aCat = [];
-  const aSeed = [];
+// smoothstep(edge0 -> edge1) on the CPU, matching the GLSL the other overlays use for the
+// time window, so a crash fades over the same Hour-spread whether it's a column or a point.
+function smoothWindow(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function buildCollisionGrid(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const cols = Math.max(8, Math.round(groundSpanX / GRID_CELL));
+  const rowsN = Math.max(8, Math.round(groundSpanZ / GRID_CELL));
+  const originX = -groundSpanX / 2;
+  const originZ = -groundSpanZ / 2;
+
+  // Each populated cell keeps a 24-hour histogram split by severity, so a column can colour
+  // itself by the worst class present in the window and take its height from the total.
+  const cellMap = new Map();
+  const allHours = [];
   for (const r of rows) {
-    const lon = cfg.lon(r);
-    const lat = cfg.lat(r);
+    const lon = parseFloat(r.longitude);
+    const lat = parseFloat(r.latitude);
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
-    const hour = cfg.hour(r);
+    const hour = parseInt((r.crash_time || '').split(':')[0], 10);
     if (!(hour >= 0 && hour < 24)) continue;
     const l = toLocal(lon, lat);
-    pos.push(l.x, cfg.y, l.z); // lifted just off the street so the glow clears the roads
-    aHour.push(hour);
-    aCat.push(cfg.category(r));
-    aSeed.push(Math.random());
+    const i = Math.floor((l.x - originX) / GRID_CELL);
+    const j = Math.floor((l.z - originZ) / GRID_CELL);
+    if (i < 0 || i >= cols || j < 0 || j >= rowsN) continue;
+    const key = j * cols + i;
+    let cell = cellMap.get(key);
+    if (!cell) {
+      cell = {
+        cx: originX + (i + 0.5) * GRID_CELL,
+        cz: originZ + (j + 0.5) * GRID_CELL,
+        fatal: new Float32Array(24),
+        injury: new Float32Array(24),
+        property: new Float32Array(24),
+      };
+      cellMap.set(key, cell);
+    }
+    if (+r.number_of_persons_killed > 0) cell.fatal[hour] += 1;
+    else if (+r.number_of_persons_injured > 0) cell.injury[hour] += 1;
+    else cell.property[hour] += 1;
+    allHours.push(hour);
   }
-  if (pos.length === 0) return null;
+  const cells = [...cellMap.values()];
+  if (cells.length === 0) return null;
+  overlayHourly.collisions = histFromHours(allHours);
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('aHour', new THREE.Float32BufferAttribute(aHour, 1));
-  geo.setAttribute('aCat', new THREE.Float32BufferAttribute(aCat, 1));
-  geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(aSeed, 1));
-
-  // Up to six fixed category colours, passed as separate uniforms (a ternary chain picks
-  // one) so this compiles on GLSL1 — dynamic uniform-array indexing needs GLSL3.
-  const c = [];
-  for (let i = 0; i < 6; i += 1) c.push(new THREE.Color(cfg.colors[Math.min(i, cfg.colors.length - 1)]));
+  // A unit-tall hexagonal prism, base on the street so a per-instance Y-scale grows it
+  // straight up. Radius a touch under half the cell so columns read as separate towers.
+  const geo = new THREE.CylinderGeometry(GRID_CELL * 0.46, GRID_CELL * 0.46, 1, 6);
+  geo.translate(0, 0.5, 0);
+  const aCol = new Float32Array(cells.length * 3);
+  geo.setAttribute('aCol', new THREE.InstancedBufferAttribute(aCol, 3));
 
   const mat = new THREE.ShaderMaterial({
     transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: {
-      uHour: { value: 12 },
-      uWindow: { value: settings[cfg.keys.window] },
-      uTime: { value: 0 },
-      uSize: { value: settings[cfg.keys.size] },
-      uOpacity: { value: settings[cfg.keys.opacity] },
-      uC0: { value: c[0] }, uC1: { value: c[1] }, uC2: { value: c[2] },
-      uC3: { value: c[3] }, uC4: { value: c[4] }, uC5: { value: c[5] },
-      ...categoryEnableUniforms(cfg),
-    },
+    depthWrite: true,                     // solid columns: write depth so they don't read hollow
+    polygonOffset: true,                  // bias depth so columns don't z-fight the buildings they pass through
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+    uniforms: { uOpacity: { value: settings.collisionOpacity } },
     vertexShader: /* glsl */`
-      attribute float aHour;
-      attribute float aCat;
-      attribute float aSeed;
-      uniform float uHour, uWindow, uTime, uSize;
-      varying float vCat;
-      varying float vVis;
+      attribute vec3 aCol;
+      varying vec3 vCol;
+      varying float vUp;
       void main() {
-        vCat = aCat;
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        float d = abs(aHour - uHour);
-        d = min(d, 24.0 - d);
-        vVis = smoothstep(uWindow, 0.0, d);
-        float breathe = 0.85 + 0.15 * sin(uTime * 2.2 + aSeed * 6.2831);
-        gl_PointSize = uSize * (0.35 + 1.15 * vVis) * breathe * (300.0 / -mv.z);
-        gl_Position = projectionMatrix * mv;
+        vCol = aCol;
+        vUp = uv.y;                       // 0 at the base, 1 at the top
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: /* glsl */`
       precision mediump float;
       uniform float uOpacity;
-      uniform vec3 uC0, uC1, uC2, uC3, uC4, uC5;
-      ${CATEGORY_UNIFORM_DECL}
-      varying float vCat;
-      varying float vVis;
+      varying vec3 vCol;
+      varying float vUp;
       void main() {
-        if (vVis <= 0.001) discard;
-        ${CATEGORY_GATE_GLSL}
-        float dd = length(gl_PointCoord - 0.5);
-        if (dd > 0.5) discard;
-        float core = smoothstep(0.5, 0.0, dd);   // soft disc with a bright centre
-        vec3 col = vCat < 0.5 ? uC0 : vCat < 1.5 ? uC1 : vCat < 2.5 ? uC2 : vCat < 3.5 ? uC3 : vCat < 4.5 ? uC4 : uC5;
-        gl_FragColor = vec4(col * (0.35 + core * 1.7), core * vVis * uOpacity);
+        // A solid column that just brightens toward the top so the tip glows into the
+        // bloom — not a see-through tube.
+        float glow = 0.6 + 0.5 * vUp;
+        float alpha = uOpacity * (0.78 + 0.22 * vUp);
+        gl_FragColor = vec4(vCol * glow, alpha);
       }
     `,
   });
 
-  const mesh = new THREE.Points(geo, mat);
-  mesh.visible = settings[cfg.keys.visible];
+  const mesh = new THREE.InstancedMesh(geo, mat, cells.length);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
-  mesh.renderOrder = cfg.renderOrder;
-  overlayHourly[cfg.keys.visible] = histFromHours(aHour);
-  return registerOverlay({ mesh, material: mat, kind: 'point', keys: cfg.keys, catKeys: cfg.categoryKeys });
+  mesh.renderOrder = 4;
+  mesh.visible = settings.collisions;
+
+  const dummy = new THREE.Object3D();
+  let lastSig = '';
+  // Rebuild the column heights/colours for the current hour, but only when something that
+  // changes them moved — the hour bucket, the window, the height knob or a severity toggle.
+  // Opacity rides the uniform live (updateOverlays) and stays out of this signature.
+  function update(hour) {
+    const win = settings.collisionWindow;
+    const heightScale = settings.collisionSize / 120; // the Size slider now sets column height
+    const showF = settings.collisionFatal;
+    const showI = settings.collisionInjury;
+    const showP = settings.collisionProperty;
+    const sig = `${Math.round(hour * 20)}|${win}|${heightScale}|${showF}${showI}${showP}`;
+    if (sig === lastSig) return;
+    lastSig = sig;
+
+    for (let idx = 0; idx < cells.length; idx += 1) {
+      const cell = cells[idx];
+      let fatal = 0;
+      let injury = 0;
+      let property = 0;
+      for (let h = 0; h < 24; h += 1) {
+        let d = Math.abs(h - hour);
+        d = Math.min(d, 24 - d);
+        if (d >= win) continue;
+        const w = smoothWindow(win, 0, d);
+        fatal += cell.fatal[h] * w;
+        injury += cell.injury[h] * w;
+        property += cell.property[h] * w;
+      }
+      const shown = (showF ? fatal : 0) + (showI ? injury : 0) + (showP ? property : 0);
+      // Colour by the worst severity actually shown, so one fatal crash flags the block red.
+      let color = COLLISION_COLORS[2];
+      if (showF && fatal > 0.001) color = COLLISION_COLORS[0];
+      else if (showI && injury > 0.001) color = COLLISION_COLORS[1];
+      // Height from sqrt(count) measured above the show threshold, so quiet cells stay low
+      // and only genuine clusters stand tall — that spread is the whole read. Every shown
+      // column gets at least GRID_MIN_H so none flattens into a disc on the ground.
+      const height = shown > GRID_MIN
+        ? Math.min(GRID_HEIGHT_MAX, GRID_MIN_H + GRID_HEIGHT_K * (Math.sqrt(shown) - Math.sqrt(GRID_MIN))) * heightScale
+        : 0;
+      if (height > 0) {
+        // Lift the base a hair off the street so the bottom cap doesn't z-fight the floor.
+        dummy.position.set(cell.cx, 0.4, cell.cz);
+        dummy.scale.set(1, height, 1);
+      } else {
+        // Pruned cell: collapse to a zero-area point so it isn't rasterised at all (a flat
+        // scale-0 column would still draw its caps at ground level and sparkle).
+        dummy.position.set(cell.cx, 0, cell.cz);
+        dummy.scale.set(0, 0, 0);
+      }
+      dummy.updateMatrix();
+      mesh.setMatrixAt(idx, dummy.matrix);
+      aCol[idx * 3] = color.r;
+      aCol[idx * 3 + 1] = color.g;
+      aCol[idx * 3 + 2] = color.b;
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    geo.getAttribute('aCol').needsUpdate = true;
+  }
+  update(settings.timeOfDay / 60);
+
+  return registerOverlay({
+    mesh, material: mat, kind: 'grid', update,
+    keys: { visible: 'collisions', window: 'collisionWindow', size: 'collisionSize', opacity: 'collisionOpacity' },
+    catKeys: ['collisionFatal', 'collisionInjury', 'collisionProperty'],
+  });
 }
 
 // One marker's geometry: a tall, narrow square-pyramid spike hanging point-DOWN — the
@@ -4740,17 +4934,9 @@ function buildArcLayer(rows, config) {
   return registerOverlay({ mesh, material: mat, kind: 'arc', keys: cfg.keys });
 }
 
-// Collisions: Motor Vehicle Collisions, coloured by severity.
+// Collisions: Motor Vehicle Collisions, aggregated into a hex-column risk grid.
 function buildCollisions(rows) {
-  return buildPointLayer(rows, {
-    lon: (r) => parseFloat(r.longitude),
-    lat: (r) => parseFloat(r.latitude),
-    hour: (r) => parseInt((r.crash_time || '').split(':')[0], 10),
-    category: (r) => (+r.number_of_persons_killed > 0 ? 0 : (+r.number_of_persons_injured > 0 ? 1 : 2)),
-    colors: ['#ff2e2e', '#ff9d2e', '#5b8cff'], // fatal · injury · property-only
-    categoryKeys: ['collisionFatal', 'collisionInjury', 'collisionProperty'],
-    keys: { visible: 'collisions', size: 'collisionSize', window: 'collisionWindow', opacity: 'collisionOpacity' },
-  });
+  return buildCollisionGrid(rows);
 }
 
 // Crime: NYPD complaints, coloured by legal class. Rendered as semi-transparent pastel
@@ -5312,8 +5498,13 @@ function applySetting(key, value) {
   // Per-category checkboxes (crime by class, collisions by severity) flip the matching
   // enable uniform, and the shader discards that category's instances. Its position in
   // catKeys is the uEn index the ternary gate reads.
+  // Point/marker layers gate the category in a uniform the shader reads; the collisions
+  // grid has no such uniform (it re-bins on its update signature), so guard on presence.
   const catLayer = overlayLayers.find((l) => l.catKeys && l.catKeys.includes(key));
-  if (catLayer) catLayer.material.uniforms[`uE${catLayer.catKeys.indexOf(key)}`].value = value ? 1 : 0;
+  if (catLayer) {
+    const catUniform = catLayer.material.uniforms[`uE${catLayer.catKeys.indexOf(key)}`];
+    if (catUniform) catUniform.value = value ? 1 : 0;
+  }
 
   switch (key) {
     case 'exposure':
@@ -5493,6 +5684,35 @@ function applySetting(key, value) {
       break;
     case 'sunIntensity':
       sun.intensity = value;
+      break;
+    case 'areaOn':
+      for (const l of areaLights) l.intensity = value ? settings.areaStrength : 0;
+      break;
+    case 'areaStrength':
+      for (const l of areaLights) l.intensity = settings.areaOn ? value : 0;
+      break;
+    case 'areaColor':
+      for (const l of areaLights) l.color.set(value);
+      break;
+    case 'areaWidth':
+      for (const l of areaLights) l.width = value;
+      refreshAreaOutlineGeometry();
+      break;
+    case 'areaHeight':
+      for (const l of areaLights) l.height = value;
+      refreshAreaOutlineGeometry();
+      break;
+    case 'areaOutlines':
+      for (const o of areaOutlines) o.visible = value;
+      break;
+    case 'areaTarget':
+      applyAreaTarget();
+      break;
+    case 'area1X': case 'area1Y': case 'area1Z':
+      positionAreaLight(0);
+      break;
+    case 'area2X': case 'area2Y': case 'area2Z':
+      positionAreaLight(1);
       break;
     case 'uiAccent':
       // The panel chrome is styled off this one custom property, so the UI re-tints
@@ -6342,6 +6562,26 @@ const SECTION_INFO = {
       pinpoints a single hour, high keeps more on screen. <strong>Opacity</strong> —
       fades the whole layer up or down.</p>`,
   },
+  lighting: {
+    title: 'Fill lights',
+    body: `
+      <p>Two big, dim <strong>softboxes</strong> hang high above the city and tilt down at
+      it. Their only job is to lift the massing <strong>out of shadow</strong> — when the sun
+      is low and hard, the shadowed faces of the buildings would otherwise crush to black.
+      They're deliberately broad, high and neutral so they read as a soft ambient sheen, not
+      a second key light (low and bright would throw a blown-out reflection of the light
+      rectangle across the near-mirror streets).</p>
+      <p><strong>Strength</strong>, <strong>Colour</strong> and the <strong>Width</strong> /
+      <strong>Height</strong> (which set the diffusion — a bigger panel is a softer, more
+      wrapped light) are shared by both. <strong>Position</strong> is per-light; each re-aims
+      at the city centre as you move it. <strong>Show placement outlines</strong> draws a
+      yellow border where each panel sits so you can see what you're moving.</p>
+      <p><strong>Applies to</strong> aims the fill: at the <strong>buildings</strong>, the
+      <strong>surface</strong> (the ground / water plane), or both. Lets you lift the towers
+      out of shadow without also washing out the streets, or vice-versa.</p>
+      <p class="info-controls">Note: area lights <strong>can't cast shadows</strong> in the
+      engine — that's the sun's role — so there's no shadow control here.</p>`,
+  },
   heatmap: {
     title: 'Density heatmap',
     body: `
@@ -6360,8 +6600,9 @@ const SECTION_INFO = {
   collisions: {
     title: 'Collisions',
     body: `
-      <p>Every point is a real <strong>motor-vehicle collision</strong> reported to NYPD,
-      placed where it happened. Colour is severity:</p>
+      <p>Real <strong>motor-vehicle collisions</strong> reported to NYPD, binned into a grid
+      of columns — a few blocks each. A column's <strong>height</strong> is how many crashes
+      happened there; its <strong>colour</strong> is the worst severity present:</p>
       <ul class="info-legend">
         <li><span class="cat-term">Fatal</span><i class="cat-dot" style="--dot:#ff2e2e"></i>
           — at least one person killed.</li>
@@ -6370,11 +6611,12 @@ const SECTION_INFO = {
         <li><span class="cat-term">Property-only</span><i class="cat-dot" style="--dot:#5b8cff"></i>
           — vehicle or property damage, no one injured.</li>
       </ul>
-      <p>A year of crashes is aggregated <strong>by time of day</strong>: each shows at the
-      hour it occurred, so the Time-of-day slider reveals when — and where — the roads turn
-      dangerous. Quiet overnight, dense through the afternoon and evening rush.</p>
-      <p class="info-controls"><strong>Size</strong> — how big each point glows.
-      <strong>Hour spread</strong> — how many hours of crashes show at once.
+      <p>A year of crashes is aggregated <strong>by time of day</strong>: each column counts
+      only the crashes near the current hour, so the Time-of-day slider grows and shrinks the
+      towers to show when — and where — the roads turn dangerous. Quiet overnight, dense
+      through the afternoon and evening rush.</p>
+      <p class="info-controls"><strong>Height</strong> — how tall the busiest columns stand.
+      <strong>Hour spread</strong> — how many hours of crashes each column counts.
       <strong>Opacity</strong> — fades the whole layer.</p>`,
   },
   crime: {

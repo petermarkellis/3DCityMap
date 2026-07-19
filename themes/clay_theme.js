@@ -34,7 +34,7 @@ export default {
   // waterTintStrength 0 leaves the river on its floor colour; raise it (0..1) to wash
   // the water toward waterTint.
   envColor: '#fff6ef', envIntensity: 1.6,
-  skyColor: '#a3afcc', groundColor: '#50452b',
+  skyColor: '#a3afcc', groundColor: '#b6bcc3',
   // Asphalt reflection: how much sky the wet-looking streets throw back, and how sharp.
   floorReflection: 0.70, floorRoughness: 0.42,
   waterTint: '#2f6f7f', waterTintStrength: 0.09,
@@ -49,13 +49,22 @@ export default {
   sunColor: '#e1d6cb', sunIntensity: 2.48,
   skyLight: '#a3afcc', groundLight: '#4a2410',
 
+  // Fill lights — the two softboxes that lift the massing out of shadow (Fill lights
+  // section). Strength / colour / size are shared by both; position is per-light;
+  // `areaTarget` is which surfaces they touch ('both' | 'buildings' | 'surface'). The
+  // yellow placement-outline toggle is a tool, not a look, so it stays out of the theme.
+  areaOn: true, areaStrength: 0.55, areaColor: '#ffffff',
+  areaWidth: 700, areaHeight: 460, areaTarget: 'both',
+  area1X: -360, area1Y: 620, area1Z: 260,
+  area2X: 380, area2Y: 680, area2Z: -240,
+
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.
   buildingsVisible: true, buildingOpacity: 1.00, reflectTrails: false,
   buildingRoughness: 0.72, buildingMetalness: 0.15,
   buildingSpecular: 1.00, buildingDiffuse: 1.00,
   buildingSheen: 0.40, buildingGrain: 0.35, buildingVariation: 0.35,
-  buildingColor: '#46433f', edgeColor: '#69513f', showEdges: true,
+  buildingColor: '#625f5b', edgeColor: '#69513f', showEdges: true,
   // A dim, desaturated take on the trail glow: at grazing angles the facades pick
   // up a faint warmth from the light they sit in, without tinting the palette.
   buildingSheenColor: '#3d2417',

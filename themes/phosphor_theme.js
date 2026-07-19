@@ -46,6 +46,13 @@ export default {
   sunColor: '#9dffc8', sunIntensity: 0.40,
   skyLight: '#1e5136', groundLight: '#0d3a20',
 
+  // Fill lights — the two shadow-lifting softboxes (Fill lights section). areaTarget picks
+  // which surfaces they touch; areaOutlines (the placement border) stays out of the theme.
+  areaOn: true, areaStrength: 0.55, areaColor: '#ffffff',
+  areaWidth: 700, areaHeight: 460, areaTarget: 'both',
+  area1X: -360, area1Y: 620, area1Z: 260,
+  area2X: 380, area2Y: 680, area2Z: -240,
+
   // Buildings — surface response (the Softness/Metalness/Specular/Diffuse/Sheen
   // controls) and the facade palette.
   buildingsVisible: true, buildingOpacity: 1.00, reflectTrails: false,

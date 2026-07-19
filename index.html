@@ -1826,8 +1826,8 @@
             <span>Show vehicle collisions</span>
           </label>
           <label>
-            <span>Size<em data-value="collisionSize"></em></span>
-            <input type="range" data-setting="collisionSize" min="40" max="220" step="5" value="120" />
+            <span>Height<em data-value="collisionSize"></em></span>
+            <input type="range" data-setting="collisionSize" min="40" max="240" step="5" value="120" />
           </label>
           <label>
             <span>Hour spread<em data-value="collisionWindow"></em></span>
@@ -2084,6 +2084,79 @@
             <input type="color" data-phase="dusk" data-setting="groundLight" />
             <input type="color" data-phase="night" data-setting="groundLight" />
           </div>
+        </section>
+
+        <section data-collapsed>
+          <h2>
+            <button type="button" class="section-toggle" aria-expanded="false">
+              <span>Fill lights</span>
+            </button>
+            <button type="button" class="section-info" data-info="lighting" aria-label="About the fill lights">
+              <span class="section-info-icon" aria-hidden="true">i</span>
+            </button>
+            <button type="button" class="section-collapse" tabindex="-1" aria-label="Collapse section">
+              <span class="chev" aria-hidden="true">+</span>
+            </button>
+          </h2>
+          <label class="check">
+            <input type="checkbox" data-setting="areaOn" checked />
+            <span>Enable fill lights</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-setting="areaOutlines" />
+            <span>Show placement outlines</span>
+          </label>
+          <label class="pick">
+            <span>Applies to</span>
+            <select data-setting="areaTarget">
+              <option value="both">Buildings &amp; surface</option>
+              <option value="buildings">Buildings only</option>
+              <option value="surface">Surface only</option>
+            </select>
+          </label>
+          <div class="group-divider"></div>
+          <label>
+            <span>Strength<em data-value="areaStrength"></em></span>
+            <input type="range" data-setting="areaStrength" min="0" max="2" step="0.01" value="0.55" />
+          </label>
+          <label>
+            <span>Colour</span>
+            <input type="color" data-setting="areaColor" value="#ffffff" />
+          </label>
+          <label>
+            <span>Width<em data-value="areaWidth"></em></span>
+            <input type="range" data-setting="areaWidth" min="100" max="1500" step="10" value="700" />
+          </label>
+          <label>
+            <span>Height<em data-value="areaHeight"></em></span>
+            <input type="range" data-setting="areaHeight" min="100" max="1500" step="10" value="460" />
+          </label>
+          <div class="group-divider"></div>
+          <label>
+            <span>Light 1 · X<em data-value="area1X"></em></span>
+            <input type="range" data-setting="area1X" min="-900" max="900" step="10" value="-360" />
+          </label>
+          <label>
+            <span>Light 1 · Altitude<em data-value="area1Y"></em></span>
+            <input type="range" data-setting="area1Y" min="100" max="1400" step="10" value="620" />
+          </label>
+          <label>
+            <span>Light 1 · Z<em data-value="area1Z"></em></span>
+            <input type="range" data-setting="area1Z" min="-900" max="900" step="10" value="260" />
+          </label>
+          <div class="group-divider"></div>
+          <label>
+            <span>Light 2 · X<em data-value="area2X"></em></span>
+            <input type="range" data-setting="area2X" min="-900" max="900" step="10" value="380" />
+          </label>
+          <label>
+            <span>Light 2 · Altitude<em data-value="area2Y"></em></span>
+            <input type="range" data-setting="area2Y" min="100" max="1400" step="10" value="680" />
+          </label>
+          <label>
+            <span>Light 2 · Z<em data-value="area2Z"></em></span>
+            <input type="range" data-setting="area2Z" min="-900" max="900" step="10" value="-240" />
+          </label>
         </section>
 
         <section data-collapsed>
