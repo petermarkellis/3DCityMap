@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Taxi Mapper — Every Layer of New York</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: '#5b9ea6',
+            'brand-light': '#e8f4f6',
+            'brand-dark': '#3d7a82',
+            ink: '#1a1a2e',
+            muted: '#6b7280',
+            subtle: '#f1f3f5',
+          },
+          fontFamily: {
+            sans: ['DM Sans', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    body { background: #fafbfc; }
+
+    .fade-in {
+      opacity: 0;
+      transform: translateY(16px);
+      animation: fadeUp 600ms ease forwards;
+    }
+    .fade-in-d1 { animation-delay: 100ms; }
+    .fade-in-d2 { animation-delay: 200ms; }
+    .fade-in-d3 { animation-delay: 300ms; }
+
+    @keyframes fadeUp {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .screenshot-card {
+      transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 400ms ease;
+    }
+    .screenshot-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.08);
+    }
+
+    .logo-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #5b9ea6;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.02em;
+      flex-shrink: 0;
+    }
+
+    .btn-brand {
+      background: #5b9ea6;
+      color: white;
+      transition: background 200ms ease, transform 150ms ease, box-shadow 200ms ease;
+    }
+    .btn-brand:hover {
+      background: #4d8e96;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(91,158,166,0.25);
+    }
+    .btn-brand:active { transform: translateY(0); }
+
+    .feature-card {
+      transition: box-shadow 300ms ease;
+    }
+    .feature-card:hover {
+      box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+    }
+
+    .dot-grid {
+      background-image: radial-gradient(#dde3e7 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+  </style>
+</head>
+<body class="text-ink font-sans antialiased overflow-x-hidden">
+
+  <!-- NAV -->
+  <nav class="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-lg border-b border-gray-100">
+    <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-2.5">
+        <div class="logo-circle">M</div>
+        <span class="text-sm font-medium text-ink tracking-tight">taximapper.xyz</span>
+      </a>
+      <div class="flex items-center gap-6 text-sm text-muted">
+        <a href="#features" class="hover:text-ink transition-colors">Features</a>
+        <a href="#gallery" class="hover:text-ink transition-colors">Gallery</a>
+        <a href="#data" class="hover:text-ink transition-colors">Data</a>
+        <a href="index.html" class="btn-brand text-sm font-semibold px-5 py-1.5 rounded-full">View Demo</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="relative min-h-screen flex items-center justify-center dot-grid">
+    <!-- Subtle top gradient -->
+    <div class="absolute inset-0 bg-gradient-to-b from-brand/5 via-transparent to-transparent pointer-events-none"></div>
+
+    <div class="relative z-10 max-w-3xl mx-auto px-6 text-center">
+      <div class="fade-in">
+        <p class="font-mono text-xs tracking-[0.2em] uppercase text-brand mb-6">A data experiment</p>
+        <h1 class="text-5xl sm:text-7xl font-bold text-ink leading-[1.05] tracking-tight mb-6">
+          Every Layer<br/>of New York
+        </h1>
+      </div>
+
+      <p class="fade-in fade-in-d1 text-lg sm:text-xl text-muted leading-relaxed max-w-xl mx-auto mb-10">
+        A real-time 3D map of Manhattan — buildings, streets, taxis, bikes,
+        crime, collisions, and 311 complaints — all layered on a single
+        living map.
+      </p>
+
+      <div class="fade-in fade-in-d2 flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
+        <a href="index.html" class="btn-brand font-semibold px-8 py-3 rounded-full text-base inline-flex items-center gap-2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          View Demo
+        </a>
+        <a href="#features" class="text-muted hover:text-ink text-sm transition-colors border border-gray-200 px-6 py-3 rounded-full hover:border-gray-300">
+          Learn More
+        </a>
+      </div>
+
+      <div class="fade-in fade-in-d3">
+        <div class="rounded-2xl overflow-hidden shadow-2xl shadow-black/10 max-w-4xl mx-auto border border-gray-100">
+          <img src="screenshots/screenshot_d.jpg" alt="Wide aerial view of Manhattan at night with taxi light-trails" class="w-full h-auto" />
+        </div>
+        <p class="text-xs text-muted mt-4 font-mono">Wide aerial view — taxi light-trails threading the street grid</p>
+      </div>
+    </div>
+
+    <!-- scroll hint -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-gray-400 text-xs">
+      <span class="font-mono tracking-widest uppercase">Scroll</span>
+      <div class="w-px h-8 bg-gradient-to-b from-gray-300 to-transparent"></div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features" class="relative py-32 bg-white">
+    <div class="max-w-6xl mx-auto px-6">
+      <div class="text-center mb-20">
+        <p class="font-mono text-xs tracking-[0.2em] uppercase text-brand mb-4">What it does</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-ink tracking-tight">Built from real data,<br/>driven by the city</h2>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l6 -3l6 3l6 -3v13l-6 3l-6 -3l-6 3z"/><path d="M9 4v13"/><path d="M15 7v13"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">Live OSM Geometry</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            Buildings and streets fetched live from OpenStreetMap's Overpass API,
+            extruded and traced in place over Manhattan.
+          </p>
+        </div>
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">1,600 Taxi Light-Trails</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            A fleet of cabs drives the real street graph, braking for corners and
+            leaving glowing trails — a long-exposure photograph in real time.
+          </p>
+        </div>
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">Real Pickup Demand</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            Taxi origins drawn from actual 2015 NYC yellow-cab pickup records —
+            the last year with true lat/lon — weighted by hour of day.
+          </p>
+        </div>
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c0-5 2-8 2-8s2 3 2 8"/><path d="M17 10c0-3 2-6 2-6s-2 3-2 6"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">Animated Water</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            Rivers derived from coastline data as a signed-distance field, with
+            animated simplex-noise swell and shoreline effects.
+          </p>
+        </div>
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">NYC Dataset Overlays</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            Citi Bike trails, 311 complaints, vehicle collisions, crime reports,
+            and density heatmaps — all toggleable layers.
+          </p>
+        </div>
+
+        <div class="feature-card bg-subtle rounded-2xl p-7 border border-gray-100">
+          <div class="w-10 h-10 rounded-xl bg-brand/10 border border-brand/15 flex items-center justify-center mb-5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b9ea6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          </div>
+          <h3 class="text-ink font-semibold mb-2">Four Themes</h3>
+          <p class="text-sm text-muted leading-relaxed">
+            Orange burn, Blueprint, Green CRT, and Grayscale — switchable live,
+            each re-skinning the entire scene with 100+ parameters.
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- GALLERY -->
+  <section id="gallery" class="relative py-32 bg-subtle">
+    <div class="max-w-6xl mx-auto px-6">
+      <div class="text-center mb-16">
+        <p class="font-mono text-xs tracking-[0.2em] uppercase text-brand mb-4">Gallery</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-ink tracking-tight">See the city breathe</h2>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-6">
+        <div class="screenshot-card bg-white rounded-2xl overflow-hidden border border-gray-100">
+          <img src="screenshots/screenshot_a.jpg" alt="Look and Camera panels framing the city" class="w-full h-auto" />
+          <div class="p-5">
+            <p class="text-sm text-muted font-mono">Look &amp; Camera panels — re-tinted with the active theme</p>
+          </div>
+        </div>
+        <div class="screenshot-card bg-white rounded-2xl overflow-hidden border border-gray-100">
+          <img src="screenshots/screenshot_b.jpg" alt="Close-up of the street grid and taxi trails" class="w-full h-auto" />
+          <div class="p-5">
+            <p class="text-sm text-muted font-mono">Street-level view of the taxi trail network</p>
+          </div>
+        </div>
+        <div class="screenshot-card bg-white rounded-2xl overflow-hidden border border-gray-100">
+          <img src="screenshots/screenshot_c.jpg" alt="Overhead grid view with water shoreline" class="w-full h-auto" />
+          <div class="p-5">
+            <p class="text-sm text-muted font-mono">Top-down — streets lit by trails, water rippling at the shore</p>
+          </div>
+        </div>
+        <div class="screenshot-card bg-white rounded-2xl overflow-hidden border border-gray-100">
+          <img src="screenshots/screenshot_d.jpg" alt="Wide aerial view of Manhattan at night" class="w-full h-auto" />
+          <div class="p-5">
+            <p class="text-sm text-muted font-mono">Wide aerial — the full grid glowing at night</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DATA SOURCES -->
+  <section id="data" class="relative py-32 bg-white">
+    <div class="max-w-4xl mx-auto px-6">
+      <div class="text-center mb-16">
+        <p class="font-mono text-xs tracking-[0.2em] uppercase text-brand mb-4">Data Sources</p>
+        <h2 class="text-3xl sm:text-4xl font-bold text-ink tracking-tight">Open data, real city</h2>
+      </div>
+
+      <div class="bg-subtle rounded-2xl p-8 sm:p-10 border border-gray-100">
+        <div class="grid sm:grid-cols-2 gap-8">
+          <div>
+            <h3 class="text-ink font-semibold mb-3 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-brand"></span>
+              Map Geometry
+            </h3>
+            <p class="text-sm text-muted leading-relaxed">
+              Buildings and roads from <a href="https://www.openstreetmap.org/" target="_blank" class="text-brand-dark font-medium hover:underline">OpenStreetMap</a> via the
+              Overpass API. Water coastlines from OSM coastline data.
+            </p>
+          </div>
+          <div>
+            <h3 class="text-ink font-semibold mb-3 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-brand"></span>
+              Taxi Demand
+            </h3>
+            <p class="text-sm text-muted leading-relaxed">
+              2015 NYC yellow-cab pickup records from <a href="https://opendata.cityofnewyork.us/" target="_blank" class="text-brand-dark font-medium hover:underline">NYC Open Data</a> —
+              the last year with true pickup coordinates.
+            </p>
+          </div>
+          <div>
+            <h3 class="text-ink font-semibold mb-3 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-brand"></span>
+              Overlay Datasets
+            </h3>
+            <p class="text-sm text-muted leading-relaxed">
+              Citi Bike trips, 311 service requests, vehicle collisions, and
+              NYPD crime complaints — all from NYC Open Data.
+            </p>
+          </div>
+          <div>
+            <h3 class="text-ink font-semibold mb-3 flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-brand"></span>
+              Rendering
+            </h3>
+            <p class="text-sm text-muted leading-relaxed">
+              Built with <a href="https://threejs.org/" target="_blank" class="text-brand-dark font-medium hover:underline">Three.js</a> and custom GLSL shaders.
+              Bloom, depth-of-field, and ACES filmic tone mapping.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="relative py-32">
+    <div class="max-w-2xl mx-auto px-6 text-center">
+      <h2 class="text-3xl sm:text-4xl font-bold text-ink tracking-tight mb-6">Ready to explore?</h2>
+      <p class="text-muted mb-10">The demo loads map data on first visit. Subsequent loads read from your browser cache.</p>
+      <a href="index.html" class="btn-brand font-semibold px-10 py-4 rounded-full text-lg inline-flex items-center gap-2.5">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Launch Demo
+      </a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-gray-100 py-8 bg-white">
+    <div class="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted">
+      <div class="flex items-center gap-2">
+        <div class="logo-circle" style="width:24px;height:24px;font-size:11px;">M</div>
+        <span class="font-medium">taximapper.xyz</span>
+      </div>
+      <p>Built with Three.js &middot; Data from OpenStreetMap &amp; NYC Open Data</p>
+    </div>
+  </footer>
+
+</body>
+</html>

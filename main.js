@@ -5580,11 +5580,30 @@ function drainCapture() {
   if (!pendingCapture) return;
   const { resolve, reject } = pendingCapture;
   pendingCapture = null;
-  renderer.domElement.toBlob(
-    (blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))),
-    'image/jpeg',
-    0.92,
-  );
+  // Copy the live drawing buffer into a plain 2D canvas while it's still valid (the
+  // instant after render). Returning a canvas rather than a blob lets the UI overlay
+  // be composited on top before encoding.
+  try {
+    const src = renderer.domElement;
+    const canvas = document.createElement('canvas');
+    canvas.width = src.width;
+    canvas.height = src.height;
+    canvas.getContext('2d').drawImage(src, 0, 0);
+    resolve(canvas);
+  } catch (error) {
+    reject(error);
+  }
+}
+
+// Encode a 2D canvas to a JPEG blob at the same quality as the live capture.
+function canvasToJpegBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))),
+      'image/jpeg',
+      0.92,
+    );
+  });
 }
 
 // 4K on the long axis, keeping the window's aspect ratio so the framing matches
@@ -5641,16 +5660,43 @@ async function renderAtResolution(width, height) {
   }
   ctx.putImageData(image, 0, 0);
 
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error('toBlob returned null'))),
-      'image/jpeg',
-      0.92,
-    );
-  });
+  return canvas;
 }
 
-async function saveScreenshot({ fourK = false } = {}) {
+// html-to-image paints the DOM into a canvas so the panels, header and gizmo can be
+// baked into the saved image. It renders through the browser's own engine (via an SVG
+// <foreignObject>), so the UI's modern CSS — color-mix(), custom properties — comes
+// out right, unlike html2canvas which throws on color-mix. Loaded on demand (never on
+// startup) the first time the "Include UI components" box is used.
+let htmlToImagePromise = null;
+function loadHtmlToImage() {
+  if (!htmlToImagePromise) {
+    htmlToImagePromise = import('https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/+esm');
+  }
+  return htmlToImagePromise;
+}
+
+// Draw the on-screen UI over an already-captured scene canvas. We render the whole
+// body — skipping the WebGL canvas (its buffer is cleared by now) and forcing the
+// body's own opaque background transparent, so only the overlay chrome lands on the
+// scene — at a pixel ratio that matches the base canvas, then stretch-blit it on top
+// so 4K and window-resolution saves line up identically.
+// Note: backdrop-filter blur isn't reproduced by foreignObject rendering, so panels
+// come out with their translucent tint but without the frosted blur of the view.
+async function compositeUI(baseCanvas) {
+  const { toCanvas } = await loadHtmlToImage();
+  const uiCanvas = await toCanvas(document.body, {
+    pixelRatio: baseCanvas.width / window.innerWidth,
+    filter: (node) => node !== renderer.domElement,
+    style: { background: 'transparent' },
+    cacheBust: true,
+  });
+  const ctx = baseCanvas.getContext('2d');
+  ctx.drawImage(uiCanvas, 0, 0, baseCanvas.width, baseCanvas.height);
+  return baseCanvas;
+}
+
+async function saveScreenshot({ fourK = false, includeUI = false } = {}) {
   const number = nextShotNumber();
   const filename = `3dmap_taxi_${MAP_SLUG}_${number}.jpg`;
 
@@ -5660,10 +5706,12 @@ async function saveScreenshot({ fourK = false } = {}) {
   let blob;
   try {
     const { width, height } = fourKDimensions();
-    blob = fourK ? await renderAtResolution(width, height) : await captureFrame();
+    let canvas = fourK ? await renderAtResolution(width, height) : await captureFrame();
+    if (includeUI) canvas = await compositeUI(canvas);
+    blob = await canvasToJpegBlob(canvas);
   } catch (error) {
     console.error('Screenshot capture failed:', error);
-    return;
+    throw error; // surfaced by the Save handler so the failure isn't silent
   }
 
   // Preferred path: the File System Access API opens a real "save as" dialog so the
@@ -6776,11 +6824,28 @@ function setupCamera() {
     controls.addEventListener('start', () => { viewPreset.value = 'custom'; });
   }
 
-  // Save grabs a JPG of the current view; the checkbox decides whether it's a 4K
-  // offscreen render or the window-resolution frame.
+  // Save grabs a JPG of the current view; the checkboxes decide whether it's a 4K
+  // offscreen render or the window-resolution frame, and whether the on-screen UI
+  // (panels, header, gizmo) is baked into the image.
   const save4k = panel.querySelector('#save-4k');
-  panel.querySelector('#save-image').addEventListener('click', () => {
-    saveScreenshot({ fourK: save4k.checked });
+  const saveUI = panel.querySelector('#save-ui');
+  const saveBtn = panel.querySelector('#save-image');
+  saveBtn.addEventListener('click', async () => {
+    if (saveBtn.disabled) return;
+    const label = saveBtn.textContent;
+    // Baking in the UI (loading html-to-image, embedding fonts) takes a beat, so the
+    // button reflects progress and any failure instead of appearing to do nothing.
+    if (saveUI.checked) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
+    try {
+      await saveScreenshot({ fourK: save4k.checked, includeUI: saveUI.checked });
+    } catch {
+      saveBtn.textContent = 'Save failed';
+      setTimeout(() => { saveBtn.textContent = label; }, 2000);
+      return;
+    } finally {
+      saveBtn.disabled = false;
+    }
+    saveBtn.textContent = label;
   });
 
   // Push the defaults through the same path a click takes, so OrbitControls starts
